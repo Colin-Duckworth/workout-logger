@@ -1,24 +1,80 @@
 'use strict';
 
 /*
- * Workout Log: an offline-first set logger.
+ * Workout Log: an offline-first logger for weight training sets and cardio.
  *
- * Every set is saved to localStorage the moment it's logged; that copy on the
- * phone is the source of truth. Sets are then synced to monthly CSV files
- * (sets/YYYY-MM.csv) in a private GitHub repo through the Contents API.
- * Each set carries a UUID, so a sync merges by id: retries never duplicate
+ * Every entry is saved to localStorage the moment it's logged; that copy on the
+ * phone is the source of truth. Entries are then synced to monthly CSV files in a
+ * private GitHub repo through the Contents API:
+ *   sets/YYYY-MM.csv    one row per weight-training set
+ *   cardio/YYYY-MM.csv  one row per cardio session
+ * Each entry carries a UUID, so a sync merges by id: retries never duplicate
  * rows, and anything already in the file (e.g. edits made on a computer)
  * is preserved.
  */
 
-const COLUMNS = ['id', 'timestamp', 'date', 'exercise', 'set_number', 'reps', 'weight_kg', 'rpe', 'notes'];
+const SET_COLUMNS = ['id', 'timestamp', 'date', 'exercise', 'variation', 'set_number', 'reps', 'weight_kg', 'rpe', 'notes'];
+const CARDIO_COLUMNS = ['id', 'timestamp', 'date', 'activity', 'duration_min', 'distance_km', 'floors', 'level', 'notes'];
 
+const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core', 'Custom'];
+
+const PRESS = ['Barbell', 'Dumbbell', 'Smith Machine', 'Machine'];
+const BODYWEIGHT = ['Bodyweight', 'Weighted', 'Assisted'];
+
+// [name, category, variations]
 const DEFAULT_EXERCISES = [
-  'Squat', 'Bench Press', 'Deadlift', 'Overhead Press', 'Barbell Row', 'Pull-up',
-  'Chin-up', 'Romanian Deadlift', 'Incline Bench Press', 'Dip', 'Lat Pulldown',
-  'Leg Press', 'Lunge', 'Hip Thrust', 'Dumbbell Curl', 'Tricep Pushdown',
-  'Lateral Raise', 'Face Pull', 'Calf Raise',
-];
+  ['Bench Press', 'Push', PRESS],
+  ['Incline Bench Press', 'Push', PRESS],
+  ['Decline Bench Press', 'Push', ['Barbell', 'Dumbbell', 'Machine']],
+  ['Close-Grip Bench Press', 'Push', ['Barbell', 'Smith Machine']],
+  ['Floor Press', 'Push', ['Barbell', 'Dumbbell']],
+  ['Overhead Press', 'Push', ['Barbell', 'Dumbbell', 'Seated Dumbbell', 'Smith Machine', 'Machine']],
+  ['Push Press', 'Push', ['Barbell', 'Dumbbell']],
+  ['Landmine Press', 'Push', ['Two-Arm', 'Single-Arm']],
+  ['Dip', 'Push', BODYWEIGHT],
+  ['Push-up', 'Push', ['Bodyweight', 'Weighted']],
+  ['Chest Fly', 'Push', ['Dumbbell', 'Cable', 'Machine']],
+  ['Lateral Raise', 'Push', ['Dumbbell', 'Cable', 'Machine']],
+  ['Front Raise', 'Push', ['Dumbbell', 'Cable', 'Plate']],
+  ['Pull-up', 'Pull', BODYWEIGHT],
+  ['Chin-up', 'Pull', BODYWEIGHT],
+  ['Lat Pulldown', 'Pull', ['Wide Grip', 'Close Grip', 'Neutral Grip', 'Single-Arm']],
+  ['Row', 'Pull', ['Barbell', 'Dumbbell', 'Seated Cable', 'Machine', 'T-Bar', 'Chest-Supported']],
+  ['Face Pull', 'Pull', []],
+  ['Rear Delt Fly', 'Pull', ['Dumbbell', 'Cable', 'Machine']],
+  ['Shrug', 'Pull', ['Barbell', 'Dumbbell', 'Trap Bar']],
+  ['Straight-Arm Pulldown', 'Pull', []],
+  ['Squat', 'Legs', ['Back', 'Front', 'Goblet', 'Smith Machine']],
+  ['Deadlift', 'Legs', ['Conventional', 'Sumo', 'Trap Bar']],
+  ['Romanian Deadlift', 'Legs', ['Barbell', 'Dumbbell']],
+  ['Single-Leg RDL', 'Legs', ['Dumbbell', 'Kettlebell', 'Barbell', 'Bodyweight']],
+  ['Bulgarian Split Squat', 'Legs', ['Dumbbell', 'Barbell', 'Smith Machine', 'Bodyweight']],
+  ['Lunge', 'Legs', ['Dumbbell', 'Barbell', 'Bodyweight']],
+  ['Step-up', 'Legs', ['Dumbbell', 'Barbell', 'Bodyweight']],
+  ['Leg Press', 'Legs', []],
+  ['Hack Squat', 'Legs', []],
+  ['Leg Extension', 'Legs', []],
+  ['Leg Curl', 'Legs', ['Lying', 'Seated']],
+  ['Hip Thrust', 'Legs', ['Barbell', 'Machine', 'Smith Machine']],
+  ['Good Morning', 'Legs', []],
+  ['Hip Abduction', 'Legs', []],
+  ['Calf Raise', 'Legs', ['Standing', 'Seated', 'Leg Press']],
+  ['Bicep Curl', 'Arms', ['Dumbbell', 'Barbell', 'EZ Bar', 'Cable']],
+  ['Hammer Curl', 'Arms', ['Dumbbell', 'Cable']],
+  ['Preacher Curl', 'Arms', ['EZ Bar', 'Dumbbell', 'Machine']],
+  ['Tricep Pushdown', 'Arms', ['Rope', 'Straight Bar', 'V-Bar']],
+  ['Skull Crusher', 'Arms', ['EZ Bar', 'Barbell', 'Dumbbell']],
+  ['Overhead Tricep Extension', 'Arms', ['Dumbbell', 'Cable']],
+  ['Hanging Leg Raise', 'Core', []],
+  ['Cable Crunch', 'Core', []],
+  ['Ab Wheel', 'Core', []],
+].map(([name, category, variations]) => ({ name, category, variations }));
+
+// Names from the first exercise list that are now variations (Row → Barbell, Bicep Curl → Dumbbell).
+const RETIRED_EXERCISES = ['Barbell Row', 'Dumbbell Curl'];
+
+const CARDIO_TYPES = { running: 'Running', stairmaster: 'Stairmaster' };
+const DEFAULT_ACTIVITIES = ['Basketball', 'Swimming', 'Padel', 'Soccer', 'Cycling', 'Tennis', 'Hiking', 'Rowing', 'Climbing', 'Yoga'];
 
 const DEFAULT_SETTINGS = {
   owner: 'Colin-Duckworth',
@@ -31,8 +87,11 @@ const DEFAULT_SETTINGS = {
 
 const KEY = {
   sets: 'wl.sets',
+  cardio: 'wl.cardio',
   tombstones: 'wl.tombstones',
-  exercises: 'wl.exercises',
+  exercises: 'wl.exercises.v2',
+  legacyExercises: 'wl.exercises',
+  activities: 'wl.activities',
   settings: 'wl.settings',
   current: 'wl.current',
 };
@@ -48,23 +107,61 @@ function load(key, fallback) {
   }
 }
 
+// First run on v2: start from the new catalogue and keep any exercises you added yourself.
+function loadExercises() {
+  const saved = load(KEY.exercises, null);
+  if (saved) return saved;
+  const list = DEFAULT_EXERCISES.map((e) => ({ ...e, variations: [...e.variations] }));
+  for (const name of load(KEY.legacyExercises, [])) {
+    if (typeof name === 'string' && !RETIRED_EXERCISES.includes(name) && !list.some((e) => e.name === name)) {
+      list.push({ name, category: 'Custom', variations: [] });
+    }
+  }
+  return list;
+}
+
 const state = {
-  sets: load(KEY.sets, []),               // every set logged on (or restored to) this device
-  tombstones: load(KEY.tombstones, []),   // {id, date} of deleted sets not yet removed from GitHub
-  exercises: load(KEY.exercises, DEFAULT_EXERCISES.slice()),
+  sets: load(KEY.sets, []),               // weight-training sets on (or restored to) this device
+  cardio: load(KEY.cardio, []),           // cardio sessions
+  tombstones: load(KEY.tombstones, []).map((t) => ({ kind: 'strength', ...t })), // deleted, not yet removed from GitHub
+  exercises: loadExercises(),             // [{name, category, variations}]
+  activities: load(KEY.activities, DEFAULT_ACTIVITIES.slice()), // "Other" cardio activities
   settings: { ...DEFAULT_SETTINGS, ...load(KEY.settings, {}) },
-  current: { exercise: '', reps: 5, weight: 20, setNumber: null, ...load(KEY.current, {}) },
+  current: {
+    mode: 'weights',
+    exercise: '',
+    variation: '',
+    reps: 5,
+    weight: 20,
+    setNumber: null,
+    cardioType: 'running',
+    activity: 'Basketball',
+    duration: 30,
+    distance: 5,
+    floors: 100,
+    level: 8,
+    ...load(KEY.current, {}),
+  },
   syncing: false,
   syncQueued: false,
   noSignal: false,
   lastError: '',
 };
 
-// Throws if storage is full/blocked so callers can tell the user instead of silently losing a set.
+// The two record types and where each one syncs to.
+const TABLES = {
+  strength: { key: 'sets', dir: 'sets', columns: SET_COLUMNS },
+  cardio: { key: 'cardio', dir: 'cardio', columns: CARDIO_COLUMNS },
+};
+const entries = (kind) => state[TABLES[kind].key];
+
+// Throws if storage is full/blocked so callers can tell the user instead of silently losing an entry.
 function persist() {
   localStorage.setItem(KEY.sets, JSON.stringify(state.sets));
+  localStorage.setItem(KEY.cardio, JSON.stringify(state.cardio));
   localStorage.setItem(KEY.tombstones, JSON.stringify(state.tombstones));
   localStorage.setItem(KEY.exercises, JSON.stringify(state.exercises));
+  localStorage.setItem(KEY.activities, JSON.stringify(state.activities));
   localStorage.setItem(KEY.settings, JSON.stringify(state.settings));
   localStorage.setItem(KEY.current, JSON.stringify(state.current));
 }
@@ -84,7 +181,7 @@ function localDate(d = new Date()) {
 }
 
 // ISO 8601 in the phone's local time with its UTC offset, e.g. 2026-10-24T18:05:12.345+02:00
-// (milliseconds keep sets logged within the same second in the right order).
+// (milliseconds keep entries logged within the same second in the right order).
 function localIso(d = new Date()) {
   const off = -d.getTimezoneOffset();
   const sign = off >= 0 ? '+' : '-';
@@ -110,8 +207,36 @@ function parseNum(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+// Duration in minutes from "45", "32:15" / "32.15" / "32,15" (mm:ss) or "1:05:00" (h:mm:ss).
+// The decimal keypad has no colon, so "." and "," work as the separator too.
+function parseDuration(v) {
+  const parts = String(v).trim().split(/[:.,]/);
+  if (!parts.every((p) => /^\d+$/.test(p))) return NaN;
+  const [a, b, c] = parts.map(Number);
+  if (parts.length === 1) return a;
+  if (parts.length === 2 && b < 60) return a + b / 60;
+  if (parts.length === 3 && b < 60 && c < 60) return a * 60 + b + c / 60;
+  return NaN;
+}
+
+// 32.25 → "32:15", 65 → "1:05:00"
+function fmtDuration(min) {
+  const total = Math.round(Number(min) * 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+// Whole minutes read better as "90 min"; anything with seconds as "32:15".
+function fmtDurationShort(min) {
+  const total = Math.round(Number(min) * 60);
+  return total % 60 === 0 ? `${total / 60} min` : fmtDuration(min);
+}
+
 const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
-const fmtW = (n) => String(round(Number(n) || 0));
+const fmtNum = (n) => String(round(Number(n) || 0));
+const optNum = (v) => (v === '' || v == null ? '' : Number(v));
 
 function fmtDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -125,6 +250,13 @@ function el(tag, cls, text) {
   return e;
 }
 
+function button(cls, text, onClick) {
+  const b = el('button', cls, text);
+  b.type = 'button';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
 const byTimeDesc = (a, b) => String(b.timestamp).localeCompare(String(a.timestamp));
 const byTimeAsc = (a, b) => String(a.timestamp).localeCompare(String(b.timestamp));
 
@@ -135,9 +267,9 @@ function csvCell(v) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function toCsv(rows) {
-  const lines = rows.map((r) => COLUMNS.map((c) => csvCell(r[c])).join(','));
-  return [COLUMNS.join(','), ...lines].join('\n') + '\n';
+function toCsv(columns, rows) {
+  const lines = rows.map((r) => columns.map((c) => csvCell(r[c])).join(','));
+  return [columns.join(','), ...lines].join('\n') + '\n';
 }
 
 // Minimal RFC 4180 parser (quoted cells, escaped quotes, newlines in quotes). Returns objects keyed by header.
@@ -166,52 +298,69 @@ function parseCsv(text) {
     .map((r) => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ''])));
 }
 
-const toRow = (s) => Object.fromEntries(COLUMNS.map((c) => [c, s[c]]));
+const toRow = (columns, e) => Object.fromEntries(columns.map((c) => [c, e[c]]));
 
-function fromRow(r) {
+function fromRow(kind, r) {
+  const base = { id: r.id, timestamp: r.timestamp, date: r.date, notes: r.notes || '' };
+  if (kind === 'cardio') {
+    return {
+      ...base,
+      activity: r.activity,
+      duration_min: Number(r.duration_min) || 0,
+      distance_km: optNum(r.distance_km),
+      floors: optNum(r.floors),
+      level: optNum(r.level),
+    };
+  }
   return {
-    id: r.id,
-    timestamp: r.timestamp,
-    date: r.date,
+    ...base,
     exercise: r.exercise,
+    variation: r.variation || '',
     set_number: Number(r.set_number) || 1,
     reps: Number(r.reps) || 0,
     weight_kg: Number(r.weight_kg) || 0,
-    rpe: r.rpe === '' || r.rpe == null ? '' : Number(r.rpe),
-    notes: r.notes || '',
+    rpe: optNum(r.rpe),
   };
 }
 
 // ---------- queries ----------
 
-const setsOn = (date, exercise) =>
-  state.sets.filter((s) => s.date === date && (!exercise || s.exercise === exercise));
+const exerciseDef = (name) => state.exercises.find((e) => e.name === name);
+const liftName = (s) => (s.variation ? `${s.exercise} · ${s.variation}` : s.exercise);
+const sameLift = (s, exercise, variation) => s.exercise === exercise && (s.variation || '') === (variation || '');
 
-function autoSetNumber(exercise) {
-  const nums = setsOn(today(), exercise).map((s) => Number(s.set_number) || 0);
+// Sets on a date, optionally only one exercise + variation.
+const setsOn = (date, exercise, variation) =>
+  state.sets.filter((s) => s.date === date && (exercise === undefined || sameLift(s, exercise, variation)));
+
+function autoSetNumber() {
+  const { exercise, variation } = state.current;
+  const nums = setsOn(today(), exercise, variation).map((s) => Number(s.set_number) || 0);
   return nums.length ? Math.max(...nums) + 1 : 1;
 }
 
 function currentSetNumber() {
   const c = state.current;
-  return c.setNumber ?? (c.exercise ? autoSetNumber(c.exercise) : 1);
+  return c.setNumber ?? (c.exercise ? autoSetNumber() : 1);
 }
 
-// Most recent day before today on which this exercise was done.
-function lastSession(exercise) {
+// Most recent day before today on which this exercise + variation was done.
+function lastSession(exercise, variation) {
   const t = today();
   let date = null;
   for (const s of state.sets) {
-    if (s.exercise === exercise && s.date < t && (!date || s.date > date)) date = s.date;
+    if (sameLift(s, exercise, variation) && s.date < t && (!date || s.date > date)) date = s.date;
   }
   if (!date) return null;
-  return { date, sets: setsOn(date, exercise).sort((a, b) => a.set_number - b.set_number) };
+  return { date, sets: setsOn(date, exercise, variation).sort((a, b) => a.set_number - b.set_number) };
 }
 
-function latestSetFor(exercise) {
+// Latest set of an exercise; pass a variation to narrow it down.
+function latestSet(exercise, variation) {
   let latest = null;
   for (const s of state.sets) {
-    if (s.exercise === exercise && (!latest || s.timestamp > latest.timestamp)) latest = s;
+    if (s.exercise !== exercise || (variation !== undefined && (s.variation || '') !== variation)) continue;
+    if (!latest || s.timestamp > latest.timestamp) latest = s;
   }
   return latest;
 }
@@ -219,74 +368,186 @@ function latestSetFor(exercise) {
 function recentExercises(limit = 6) {
   const seen = [];
   for (const s of [...state.sets].sort(byTimeDesc)) {
-    if (!seen.includes(s.exercise) && state.exercises.includes(s.exercise)) seen.push(s.exercise);
+    if (!seen.includes(s.exercise) && exerciseDef(s.exercise)) seen.push(s.exercise);
     if (seen.length >= limit) break;
   }
   return seen;
 }
 
-const pendingCount = () => state.sets.filter((s) => s.dirty).length + state.tombstones.length;
+const cardioActivity = () => CARDIO_TYPES[state.current.cardioType] || state.current.activity;
+
+function latestCardio(activity, beforeDate) {
+  let latest = null;
+  for (const e of state.cardio) {
+    if (e.activity !== activity || (beforeDate && e.date >= beforeDate)) continue;
+    if (!latest || e.timestamp > latest.timestamp) latest = e;
+  }
+  return latest;
+}
+
+function describeCardio(e) {
+  const parts = [fmtDurationShort(e.duration_min)];
+  if (Number(e.distance_km) > 0) {
+    parts.push(`${fmtNum(e.distance_km)} km`, `${fmtDuration(e.duration_min / e.distance_km)}/km`);
+  }
+  if (e.floors !== '' && e.floors != null) parts.push(`${e.floors} floors`);
+  if (e.level !== '' && e.level != null) parts.push(`level ${e.level}`);
+  return parts.join(' · ');
+}
+
+const pendingCount = () =>
+  state.sets.filter((s) => s.dirty).length + state.cardio.filter((e) => e.dirty).length + state.tombstones.length;
 
 // ---------- rendering ----------
 
 const els = {};
 
+function setPressed(container, value, attr) {
+  container.querySelectorAll(`[${attr}]`).forEach((b) => b.setAttribute('aria-pressed', String(b.getAttribute(attr) === value)));
+}
+
+// Write a value into an input unless you're typing in it.
+function setInput(input, value) {
+  if (document.activeElement !== input) input.value = value;
+}
+
+function chip(label, pressed, onClick, extraClass = '') {
+  const b = button(`chip ${extraClass}`.trim(), label, onClick);
+  if (pressed != null) b.setAttribute('aria-pressed', String(pressed));
+  return b;
+}
+
 function renderForm() {
+  const weights = state.current.mode === 'weights';
+  setPressed(els.modeSeg, state.current.mode, 'data-mode');
+  els.weightsForm.hidden = !weights;
+  els.cardioForm.hidden = weights;
+  if (weights) renderWeightsForm();
+  else renderCardioForm();
+}
+
+function renderWeightsForm() {
   const c = state.current;
   els.exerciseBtn.textContent = c.exercise || 'Choose exercise';
   els.exerciseBtn.classList.toggle('empty', !c.exercise);
-  if (document.activeElement !== els.reps) els.reps.value = c.reps;
-  if (document.activeElement !== els.weight) els.weight.value = fmtW(c.weight);
-  if (document.activeElement !== els.setNum) els.setNum.value = currentSetNumber();
+  setInput(els.reps, c.reps);
+  setInput(els.weight, fmtNum(c.weight));
+  setInput(els.setNum, currentSetNumber());
   els.saveBtn.disabled = !c.exercise;
   els.saveBtn.textContent = c.exercise ? `Log set ${currentSetNumber()}` : 'Choose an exercise first';
 
-  const last = c.exercise && lastSession(c.exercise);
+  els.variationChips.replaceChildren();
+  els.variationChips.hidden = !c.exercise;
+  if (c.exercise) {
+    for (const v of exerciseDef(c.exercise)?.variations || []) {
+      els.variationChips.append(chip(v, v === c.variation, () => chooseVariation(v)));
+    }
+    els.variationChips.append(chip('+ Variation', null, addVariation, 'add'));
+  }
+
+  const last = c.exercise && lastSession(c.exercise, c.variation);
   els.lastSession.textContent = !c.exercise ? '' : last
-    ? `Last time (${fmtDate(last.date)}): ${last.sets.map((s) => `${s.reps}×${fmtW(s.weight_kg)}`).join(', ')} kg`
-    : 'First time logging this one.';
+    ? `Last time (${fmtDate(last.date)}): ${last.sets.map((s) => `${s.reps}×${fmtNum(s.weight_kg)}`).join(', ')} kg`
+    : `First time logging ${c.variation ? 'this variation' : 'this one'}.`;
+}
+
+function renderCardioForm() {
+  const c = state.current;
+  const activity = cardioActivity();
+  setPressed(els.cardioSeg, c.cardioType, 'data-cardio');
+
+  els.activityChips.hidden = c.cardioType !== 'other';
+  if (c.cardioType === 'other') {
+    els.activityChips.replaceChildren();
+    for (const a of state.activities) els.activityChips.append(chip(a, a === c.activity, () => chooseActivity(a)));
+    els.activityChips.append(chip('+ Activity', null, addActivity, 'add'));
+  }
+
+  els.distanceField.hidden = c.cardioType !== 'running';
+  els.floorsField.hidden = c.cardioType !== 'stairmaster';
+  els.levelField.hidden = c.cardioType !== 'stairmaster';
+  setInput(els.cDuration, Math.round(c.duration * 60) % 60 ? fmtDuration(c.duration) : String(Math.round(c.duration)));
+  setInput(els.cDistance, fmtNum(c.distance));
+  setInput(els.cFloors, Math.round(c.floors));
+  setInput(els.cLevel, fmtNum(c.level));
+
+  const last = activity && latestCardio(activity, today());
+  els.cardioHint.textContent = !activity ? 'Pick an activity.' : last
+    ? `Last time (${fmtDate(last.date)}): ${describeCardio(last)}`
+    : `First time logging ${activity.toLowerCase()}.`;
+
+  els.saveBtn.disabled = !activity;
+  els.saveBtn.textContent = { running: 'Log run', stairmaster: 'Log stairmaster' }[c.cardioType] ||
+    (activity ? `Log ${activity.toLowerCase()}` : 'Pick an activity');
 }
 
 function renderToday() {
-  const list = setsOn(today()).sort(byTimeDesc);
+  const t = today();
+  const items = [
+    ...setsOn(t).map((e) => ({ kind: 'strength', e, group: `s|${liftName(e)}` })),
+    ...state.cardio.filter((e) => e.date === t).map((e) => ({ kind: 'cardio', e, group: `c|${e.activity}` })),
+  ].sort((a, b) => byTimeDesc(a.e, b.e));
+
   els.today.replaceChildren();
-  els.undoBtn.hidden = !list.length;
-  if (!list.length) {
-    els.today.append(el('p', 'empty-note', 'No sets logged today yet.'));
+  els.undoBtn.hidden = !items.length;
+  if (!items.length) {
+    els.today.append(el('p', 'empty-note', 'Nothing logged today yet.'));
     return;
   }
 
-  // Groups keep the order of their newest set, so the exercise you're on stays on top.
+  // Groups keep the order of their newest entry, so what you're doing now stays on top.
   const groups = new Map();
-  for (const s of list) {
-    if (!groups.has(s.exercise)) groups.set(s.exercise, []);
-    groups.get(s.exercise).push(s);
+  for (const item of items) {
+    if (!groups.has(item.group)) groups.set(item.group, []);
+    groups.get(item.group).push(item);
   }
 
-  for (const [exercise, sets] of groups) {
+  for (const list of groups.values()) {
+    const first = list[0];
     const group = el('div', 'group');
-    const title = el('button', 'group-title', exercise);
-    title.type = 'button';
-    const volume = sets.reduce((sum, s) => sum + s.reps * s.weight_kg, 0);
-    title.append(el('small', null, `${sets.length} ${sets.length === 1 ? 'set' : 'sets'} · ${fmtW(volume)} kg vol`));
-    title.addEventListener('click', () => chooseExercise(exercise));
-    group.append(title);
-
-    for (const s of sets) {
-      const row = el('div', 'set-row');
-      const meta = [s.rpe !== '' && s.rpe != null ? `RPE ${s.rpe}` : '', s.notes].filter(Boolean).join(' · ');
-      const dot = el('span', s.dirty ? 'dot pending' : 'dot');
-      if (s.dirty) dot.title = 'Waiting to sync';
-      const del = el('button', 'del', '×');
-      del.type = 'button';
-      del.setAttribute('aria-label', `Delete set ${s.set_number}`);
-      del.addEventListener('click', () => deleteSet(s.id, { confirm: true }));
-      row.append(el('span', 'set-n', `#${s.set_number}`), el('span', 'set-main', `${s.reps} × ${fmtW(s.weight_kg)} kg`),
-        el('span', 'set-meta', meta), dot, del);
-      group.append(row);
+    let title;
+    if (first.kind === 'strength') {
+      const volume = list.reduce((sum, { e }) => sum + e.reps * e.weight_kg, 0);
+      title = button('group-title', liftName(first.e), () => chooseExercise(first.e.exercise, first.e.variation || ''));
+      title.append(el('small', null, `${list.length} ${list.length === 1 ? 'set' : 'sets'} · ${fmtNum(volume)} kg vol`));
+    } else {
+      const minutes = list.reduce((sum, { e }) => sum + Number(e.duration_min), 0);
+      title = button('group-title', first.e.activity, () => selectCardioActivity(first.e.activity));
+      title.append(el('small', null, `${list.length > 1 ? `${list.length} sessions · ` : ''}${fmtDurationShort(minutes)}`));
     }
+    group.append(title);
+    for (const item of list) group.append(item.kind === 'strength' ? setRow(item.e) : cardioRow(item.e));
     els.today.append(group);
   }
+}
+
+function pendingDot(e) {
+  const dot = el('span', e.dirty ? 'dot pending' : 'dot');
+  if (e.dirty) dot.title = 'Waiting to sync';
+  return dot;
+}
+
+function deleteButton(kind, e, label) {
+  const del = button('del', '×', () => deleteEntry(kind, e.id, { confirm: true }));
+  del.setAttribute('aria-label', label);
+  return del;
+}
+
+function setRow(s) {
+  const row = el('div', 'set-row');
+  const meta = [s.rpe !== '' && s.rpe != null ? `RPE ${s.rpe}` : '', s.notes].filter(Boolean).join(' · ');
+  row.append(el('span', 'set-n', `#${s.set_number}`), el('span', 'set-main', `${s.reps} × ${fmtNum(s.weight_kg)} kg`),
+    el('span', 'set-meta', meta), pendingDot(s), deleteButton('strength', s, `Delete set ${s.set_number}`));
+  return row;
+}
+
+function cardioRow(e) {
+  const row = el('div', 'set-row cardio-row');
+  const text = el('div', 'cardio-text');
+  text.append(el('span', 'set-main', describeCardio(e)));
+  if (e.notes) text.append(el('span', 'set-meta', e.notes));
+  row.append(text, pendingDot(e), deleteButton('cardio', e, `Delete ${e.activity}`));
+  return row;
 }
 
 function renderStatus() {
@@ -329,24 +590,26 @@ function hideToast() { els.toast.hidden = true; }
 
 let lastSaveAt = 0;
 
+function logEntry() {
+  if (Date.now() - lastSaveAt < 400) return; // ignore accidental double taps
+  readForm();
+  if (state.current.mode === 'weights') logSet();
+  else logCardio();
+}
+
 function logSet() {
   const c = state.current;
   if (!c.exercise) return;
-  if (Date.now() - lastSaveAt < 400) return; // ignore accidental double taps
-  readForm();
-
   const reps = Math.round(Number(c.reps));
   const weight = round(Number(c.weight));
   if (!Number.isFinite(reps) || reps < 0) return toast('Reps must be a number', { error: true });
   if (!Number.isFinite(weight) || weight < 0) return toast('Weight must be a number', { error: true });
   const rpe = parseNum(els.rpe.value);
 
-  const now = new Date();
   const set = {
-    id: uuid(),
-    timestamp: localIso(now),
-    date: localDate(now),
+    ...stamp(),
     exercise: c.exercise,
+    variation: c.variation || '',
     set_number: currentSetNumber(),
     reps,
     weight_kg: weight,
@@ -354,41 +617,75 @@ function logSet() {
     notes: els.notes.value.trim(),
     dirty: true,
   };
-
-  state.sets.push(set);
   c.setNumber = null;
+  if (addEntry('strength', set, `Set ${set.set_number} logged: ${set.reps} × ${fmtNum(set.weight_kg)} kg`)) {
+    els.rpe.value = '';
+    els.notes.value = '';
+  }
+}
+
+function logCardio() {
+  const c = state.current;
+  const activity = cardioActivity();
+  if (!activity) return;
+  if (!(c.duration > 0)) return toast('Enter a duration', { error: true });
+
+  const entry = {
+    ...stamp(),
+    activity,
+    duration_min: round(c.duration),
+    distance_km: c.cardioType === 'running' ? round(c.distance) : '',
+    floors: c.cardioType === 'stairmaster' ? Math.round(c.floors) : '',
+    level: c.cardioType === 'stairmaster' ? round(c.level, 1) : '',
+    notes: els.cNotes.value.trim(),
+    dirty: true,
+  };
+  if (addEntry('cardio', entry, `${activity} logged: ${describeCardio(entry)}`)) els.cNotes.value = '';
+}
+
+function stamp() {
+  const now = new Date();
+  return { id: uuid(), timestamp: localIso(now), date: localDate(now) };
+}
+
+function addEntry(kind, entry, message) {
+  entries(kind).push(entry);
   try {
     persist();
   } catch (e) {
-    state.sets.pop();
-    return toast(`Could not save on this phone: ${e.message}`, { error: true });
+    entries(kind).pop();
+    toast(`Could not save on this phone: ${e.message}`, { error: true });
+    return false;
   }
-
   lastSaveAt = Date.now();
-  els.rpe.value = '';
-  els.notes.value = '';
   renderAll();
-  toast(`Set ${set.set_number} logged: ${set.reps} × ${fmtW(set.weight_kg)} kg`, {
-    action: { label: 'Undo', run: () => deleteSet(set.id) },
-  });
+  toast(message, { action: { label: 'Undo', run: () => deleteEntry(kind, entry.id) } });
   sync();
+  return true;
 }
 
-function deleteSet(id, { confirm: ask = false } = {}) {
-  const s = state.sets.find((x) => x.id === id);
-  if (!s) return;
-  if (ask && !confirm(`Delete ${s.exercise} set #${s.set_number} (${s.reps} × ${fmtW(s.weight_kg)} kg)?`)) return;
-  state.sets = state.sets.filter((x) => x.id !== id);
-  state.tombstones.push({ id, date: s.date });
-  try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
+function deleteEntry(kind, id, { confirm: ask = false } = {}) {
+  const e = entries(kind).find((x) => x.id === id);
+  if (!e) return;
+  const what = kind === 'strength'
+    ? `${liftName(e)} set #${e.set_number} (${e.reps} × ${fmtNum(e.weight_kg)} kg)`
+    : `${e.activity} (${describeCardio(e)})`;
+  if (ask && !confirm(`Delete ${what}?`)) return;
+  state[TABLES[kind].key] = entries(kind).filter((x) => x.id !== id);
+  state.tombstones.push({ id, date: e.date, kind });
+  try { persist(); } catch (err) { return toast(`Could not save: ${err.message}`, { error: true }); }
   renderAll();
-  toast('Set deleted');
+  toast(kind === 'strength' ? 'Set deleted' : 'Session deleted');
   sync();
 }
 
 function undoLast() {
-  const last = setsOn(today()).sort(byTimeDesc)[0];
-  if (last) deleteSet(last.id, { confirm: true });
+  const t = today();
+  const latest = [
+    ...setsOn(t).map((e) => ({ kind: 'strength', e })),
+    ...state.cardio.filter((e) => e.date === t).map((e) => ({ kind: 'cardio', e })),
+  ].sort((a, b) => byTimeDesc(a.e, b.e))[0];
+  if (latest) deleteEntry(latest.kind, latest.e.id, { confirm: true });
 }
 
 // Copy what's typed in the inputs into state.current.
@@ -400,77 +697,182 @@ function readForm() {
   if (Number.isFinite(reps)) c.reps = Math.max(0, Math.round(reps));
   if (Number.isFinite(weight)) c.weight = Math.max(0, round(weight));
   if (Number.isFinite(setNum) && Math.round(setNum) !== currentSetNumber()) c.setNumber = Math.max(1, Math.round(setNum));
+
+  const duration = parseDuration(els.cDuration.value);
+  const distance = parseNum(els.cDistance.value);
+  const floors = parseNum(els.cFloors.value);
+  const level = parseNum(els.cLevel.value);
+  if (duration >= 0) c.duration = round(duration, 4);
+  if (distance >= 0) c.distance = round(distance);
+  if (floors >= 0) c.floors = Math.round(floors);
+  if (level >= 0) c.level = round(level, 1);
   saveCurrent();
 }
 
 function step(field, dir) {
   readForm();
   const c = state.current;
-  if (field === 'reps') c.reps = Math.max(0, Math.round(c.reps + dir * state.settings.repStep));
-  if (field === 'weight') c.weight = Math.max(0, round(c.weight + dir * state.settings.weightStep));
-  if (field === 'set') c.setNumber = Math.max(1, currentSetNumber() + dir);
+  const { repStep, weightStep } = state.settings;
+  switch (field) {
+    case 'reps': c.reps = Math.max(0, Math.round(c.reps + dir * repStep)); break;
+    case 'weight': c.weight = Math.max(0, round(c.weight + dir * weightStep)); break;
+    case 'set': c.setNumber = Math.max(1, currentSetNumber() + dir); break;
+    case 'duration': c.duration = Math.max(0, round(c.duration + dir, 4)); break;
+    case 'distance': c.distance = Math.max(0, round(c.distance + dir * 0.5)); break;
+    case 'floors': c.floors = Math.max(0, Math.round(c.floors + dir * 5)); break;
+    case 'level': c.level = Math.max(0, round(c.level + dir, 1)); break;
+  }
   saveCurrent();
   renderForm();
 }
 
-function chooseExercise(name) {
+function setMode(mode) {
+  readForm();
+  state.current.mode = mode;
+  saveCurrent();
+  renderForm();
+}
+
+// Start from whatever you did last time on this exercise + variation.
+function prefillLift() {
   const c = state.current;
-  if (c.exercise !== name) {
-    // Start from whatever you did last time on this exercise.
-    const last = latestSetFor(name);
-    if (last) { c.reps = Number(last.reps); c.weight = Number(last.weight_kg); }
+  const last = latestSet(c.exercise, c.variation);
+  if (last) { c.reps = Number(last.reps); c.weight = Number(last.weight_kg); }
+  c.setNumber = null;
+}
+
+function chooseExercise(name, variation) {
+  const c = state.current;
+  c.mode = 'weights';
+  if (c.exercise !== name || (variation !== undefined && variation !== c.variation)) {
+    const vars = exerciseDef(name)?.variations || [];
+    if (variation === undefined) {
+      // Default to the variation you used last time, else the first one listed.
+      const last = latestSet(name);
+      variation = last && vars.includes(last.variation) ? last.variation : (vars[0] || '');
+    }
     c.exercise = name;
-    c.setNumber = null;
-    saveCurrent();
+    c.variation = variation;
+    prefillLift();
   }
+  saveCurrent();
   if (els.picker.open) els.picker.close();
   renderForm();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+function chooseVariation(variation) {
+  readForm();
+  state.current.variation = variation;
+  prefillLift();
+  saveCurrent();
+  renderForm();
+}
+
+function addVariation() {
+  const c = state.current;
+  const name = (prompt(`New variation for ${c.exercise}`, '') || '').trim().replace(/\s+/g, ' ');
+  if (!name) return;
+  let def = exerciseDef(c.exercise);
+  if (!def) {
+    def = { name: c.exercise, category: 'Custom', variations: [] };
+    state.exercises.push(def);
+  }
+  const existing = def.variations.find((v) => v.toLowerCase() === name.toLowerCase());
+  if (!existing) def.variations.push(name);
+  try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
+  chooseVariation(existing || name);
+}
+
 function addExercise(name) {
   const clean = name.trim().replace(/\s+/g, ' ');
   if (!clean) return null;
-  const existing = state.exercises.find((e) => e.toLowerCase() === clean.toLowerCase());
-  if (existing) return existing;
-  state.exercises.push(clean);
+  const existing = state.exercises.find((e) => e.name.toLowerCase() === clean.toLowerCase());
+  if (existing) return existing.name;
+  state.exercises.push({ name: clean, category: 'Custom', variations: [] });
   try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
   return clean;
 }
 
+function prefillCardio() {
+  const c = state.current;
+  const last = latestCardio(cardioActivity());
+  if (!last) return;
+  if (last.duration_min) c.duration = Number(last.duration_min);
+  if (last.distance_km !== '') c.distance = Number(last.distance_km);
+  if (last.floors !== '') c.floors = Number(last.floors);
+  if (last.level !== '') c.level = Number(last.level);
+}
+
+function chooseCardioType(type) {
+  readForm();
+  state.current.cardioType = type;
+  prefillCardio();
+  saveCurrent();
+  renderForm();
+}
+
+function chooseActivity(activity) {
+  readForm();
+  state.current.activity = activity;
+  prefillCardio();
+  saveCurrent();
+  renderForm();
+}
+
+function selectCardioActivity(activity) {
+  const type = Object.keys(CARDIO_TYPES).find((k) => CARDIO_TYPES[k] === activity);
+  state.current.mode = 'cardio';
+  if (type) chooseCardioType(type);
+  else { state.current.cardioType = 'other'; chooseActivity(activity); }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function addActivity() {
+  const name = (prompt('New activity (e.g. Volleyball)', '') || '').trim().replace(/\s+/g, ' ');
+  if (!name) return;
+  const existing = state.activities.find((a) => a.toLowerCase() === name.toLowerCase());
+  if (!existing) {
+    state.activities.push(name);
+    try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
+  }
+  chooseActivity(existing || name);
+}
+
 // ---------- exercise picker ----------
 
-function pickButton(name) {
-  const b = el('button', name === state.current.exercise ? 'pick current' : 'pick', name);
-  b.type = 'button';
-  b.addEventListener('click', () => chooseExercise(name));
+function pickButton(def) {
+  const b = button(def.name === state.current.exercise ? 'pick current' : 'pick', def.name, () => chooseExercise(def.name));
+  if (def.variations.length) b.append(el('small', null, def.variations.join(' · ')));
   return b;
 }
 
 function renderPicker() {
-  const q = els.pickerSearch.value.trim();
-  const ql = q.toLowerCase();
+  const q = els.pickerSearch.value.trim().toLowerCase();
   const list = els.pickerList;
   list.replaceChildren();
+  const sorted = [...state.exercises].sort((a, b) => a.name.localeCompare(b.name));
 
-  if (q && !state.exercises.some((e) => e.toLowerCase() === ql)) {
-    const add = el('button', 'pick add', `+ Add “${q}”`);
-    add.type = 'button';
-    add.addEventListener('click', () => chooseExercise(addExercise(q)));
-    list.append(add);
+  if (q) {
+    if (!state.exercises.some((e) => e.name.toLowerCase() === q)) {
+      const name = els.pickerSearch.value.trim();
+      list.append(button('pick add', `+ Add “${name}”`, () => chooseExercise(addExercise(name))));
+    }
+    sorted.filter((e) => e.name.toLowerCase().includes(q)).forEach((e) => list.append(pickButton(e)));
+    return;
   }
 
-  const recent = q ? [] : recentExercises();
+  const recent = recentExercises();
   if (recent.length) {
     list.append(el('h4', null, 'Recent'));
-    recent.forEach((e) => list.append(pickButton(e)));
-    list.append(el('h4', null, 'All exercises'));
+    recent.forEach((name) => list.append(pickButton(exerciseDef(name))));
   }
-
-  [...state.exercises]
-    .sort((a, b) => a.localeCompare(b))
-    .filter((e) => e.toLowerCase().includes(ql))
-    .forEach((e) => list.append(pickButton(e)));
+  for (const category of CATEGORIES) {
+    const inCategory = sorted.filter((e) => (CATEGORIES.includes(e.category) ? e.category : 'Custom') === category);
+    if (!inCategory.length) continue;
+    list.append(el('h4', null, category));
+    inCategory.forEach((e) => list.append(pickButton(e)));
+  }
 }
 
 function openPicker() {
@@ -483,9 +885,10 @@ function openPicker() {
 function onPickerEnter() {
   const q = els.pickerSearch.value.trim();
   if (!q) return;
-  const matches = state.exercises.filter((e) => e.toLowerCase().includes(q.toLowerCase()));
-  const exact = state.exercises.find((e) => e.toLowerCase() === q.toLowerCase());
-  chooseExercise(exact || (matches.length === 1 ? matches[0] : addExercise(q)));
+  const ql = q.toLowerCase();
+  const matches = state.exercises.filter((e) => e.name.toLowerCase().includes(ql));
+  const exact = state.exercises.find((e) => e.name.toLowerCase() === ql);
+  chooseExercise(exact ? exact.name : matches.length === 1 ? matches[0].name : addExercise(q));
 }
 
 // ---------- GitHub sync ----------
@@ -532,19 +935,20 @@ async function getFile(path) {
   return { sha: json.sha, text: b64decode(json.content || '') };
 }
 
-// Merge local changes for one month into sets/YYYY-MM.csv: upsert by id, drop deleted ids.
-async function syncMonth(month, upserts, deleteIds) {
-  const path = `sets/${month}.csv`;
+// Merge local changes into one monthly file (e.g. cardio/2026-10.csv): upsert by id, drop deleted ids.
+async function syncFile(kind, month, upserts, deleteIds) {
+  const { dir, columns } = TABLES[kind];
+  const path = `${dir}/${month}.csv`;
   for (let attempt = 1; ; attempt++) {
     const { sha, text } = await getFile(path);
     const byId = new Map(parseCsv(text).map((r) => [r.id, r]));
-    upserts.forEach((s) => byId.set(s.id, toRow(s)));
+    upserts.forEach((e) => byId.set(e.id, toRow(columns, e)));
     deleteIds.forEach((id) => byId.delete(id));
-    const csv = toCsv([...byId.values()].sort(byTimeAsc));
+    const csv = toCsv(columns, [...byId.values()].sort(byTimeAsc));
     if (csv === text) return; // already up to date
 
-    const parts = [upserts.length && `+${upserts.length}`, deleteIds.length && `-${deleteIds.length}`].filter(Boolean);
-    const body = { message: `Sync ${month} (${parts.join(' ')} sets)`, content: b64encode(csv), branch: state.settings.branch };
+    const counts = [upserts.length && `+${upserts.length}`, deleteIds.length && `-${deleteIds.length}`].filter(Boolean);
+    const body = { message: `Sync ${path} (${counts.join(' ')})`, content: b64encode(csv), branch: state.settings.branch };
     if (sha) body.sha = sha;
     const res = await gh(`/contents/${path}`, { method: 'PUT', body: JSON.stringify(body) });
     if (res.ok) return;
@@ -557,26 +961,31 @@ async function syncMonth(month, upserts, deleteIds) {
 async function sync() {
   if (!state.settings.token) return renderStatus();
   if (state.syncing) { state.syncQueued = true; return; }
-  const dirty = state.sets.filter((s) => s.dirty);
-  const tombs = state.tombstones.slice();
-  if (!dirty.length && !tombs.length) { state.lastError = ''; return renderStatus(); }
+  if (!pendingCount()) { state.lastError = ''; return renderStatus(); }
 
   state.syncing = true;
   state.lastError = '';
   renderStatus();
 
-  const months = new Map();
-  const bucket = (m) => { if (!months.has(m)) months.set(m, { up: [], del: [] }); return months.get(m); };
-  dirty.forEach((s) => bucket(s.date.slice(0, 7)).up.push(s));
-  tombs.forEach((t) => bucket(t.date.slice(0, 7)).del.push(t.id));
+  // One bucket per file: kind + month.
+  const buckets = new Map();
+  const bucket = (kind, date) => {
+    const key = `${kind}|${date.slice(0, 7)}`;
+    if (!buckets.has(key)) buckets.set(key, { kind, month: date.slice(0, 7), up: [], del: [] });
+    return buckets.get(key);
+  };
+  for (const kind of Object.keys(TABLES)) {
+    entries(kind).filter((e) => e.dirty).forEach((e) => bucket(kind, e.date).up.push(e));
+  }
+  state.tombstones.forEach((t) => bucket(t.kind, t.date).del.push(t.id));
 
   try {
-    for (const [month, { up, del }] of months) {
-      await syncMonth(month, up, del);
-      // Mark each month done as it lands, so a later failure doesn't redo it.
-      const upIds = new Set(up.map((s) => s.id));
+    for (const { kind, month, up, del } of buckets.values()) {
+      await syncFile(kind, month, up, del);
+      // Mark each file done as it lands, so a later failure doesn't redo it.
+      const upIds = new Set(up.map((e) => e.id));
       const delIds = new Set(del);
-      state.sets.forEach((s) => { if (upIds.has(s.id)) s.dirty = false; });
+      entries(kind).forEach((e) => { if (upIds.has(e.id)) e.dirty = false; });
       state.tombstones = state.tombstones.filter((t) => !delIds.has(t.id));
       persist();
     }
@@ -593,28 +1002,47 @@ async function sync() {
   }
 }
 
-// Pull every monthly CSV into this phone (new phone, cleared Safari data, or history logged elsewhere).
+// Pull every monthly CSV onto this phone (new phone, cleared Safari data, or history logged elsewhere).
 async function restoreFromGitHub() {
-  const res = await gh(`/contents/sets?ref=${encodeURIComponent(state.settings.branch)}`);
-  if (res.status === 404) return 0;
-  if (!res.ok) throw await apiError(res);
-  const files = (await res.json()).filter((f) => f.type === 'file' && f.name.endsWith('.csv'));
-
-  const known = new Set(state.sets.map((s) => s.id));
   const deleted = new Set(state.tombstones.map((t) => t.id));
   let added = 0;
-  for (const f of files) {
-    const { text } = await getFile(f.path);
-    for (const row of parseCsv(text)) {
-      if (!row.id || known.has(row.id) || deleted.has(row.id)) continue;
-      state.sets.push({ ...fromRow(row), dirty: false });
-      known.add(row.id);
-      if (row.exercise && !state.exercises.includes(row.exercise)) state.exercises.push(row.exercise);
-      added++;
+  for (const kind of Object.keys(TABLES)) {
+    const res = await gh(`/contents/${TABLES[kind].dir}?ref=${encodeURIComponent(state.settings.branch)}`);
+    if (res.status === 404) continue;
+    if (!res.ok) throw await apiError(res);
+    const files = (await res.json()).filter((f) => f.type === 'file' && f.name.endsWith('.csv'));
+    const known = new Set(entries(kind).map((e) => e.id));
+    for (const f of files) {
+      const { text } = await getFile(f.path);
+      for (const row of parseCsv(text)) {
+        if (!row.id || known.has(row.id) || deleted.has(row.id)) continue;
+        const entry = fromRow(kind, row);
+        entries(kind).push({ ...entry, dirty: false });
+        known.add(row.id);
+        rememberNames(kind, entry);
+        added++;
+      }
     }
   }
   persist();
   return added;
+}
+
+// Make restored exercises, variations and activities show up in the pickers.
+function rememberNames(kind, e) {
+  if (kind === 'cardio') {
+    if (e.activity && !Object.values(CARDIO_TYPES).includes(e.activity) && !state.activities.includes(e.activity)) {
+      state.activities.push(e.activity);
+    }
+    return;
+  }
+  if (!e.exercise) return;
+  let def = exerciseDef(e.exercise);
+  if (!def) {
+    def = { name: e.exercise, category: 'Custom', variations: [] };
+    state.exercises.push(def);
+  }
+  if (e.variation && !def.variations.includes(e.variation)) def.variations.push(e.variation);
 }
 
 async function testConnection() {
@@ -627,20 +1055,28 @@ async function testConnection() {
 // ---------- export ----------
 
 async function exportCsv() {
-  const csv = toCsv([...state.sets].sort(byTimeAsc).map(toRow));
-  const name = `workouts-${today()}.csv`;
-  const file = new File([csv], name, { type: 'text/csv' });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: name }); return; }
+  const stampDate = today();
+  const files = Object.entries(TABLES)
+    .filter(([kind]) => entries(kind).length)
+    .map(([kind, { dir, columns }]) => new File(
+      [toCsv(columns, [...entries(kind)].sort(byTimeAsc).map((e) => toRow(columns, e)))],
+      `${dir}-${stampDate}.csv`,
+      { type: 'text/csv' },
+    ));
+  if (!files.length) return setMsg(els.sDataMsg, 'Nothing logged yet.');
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files, title: `Workout log ${stampDate}` }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
   }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  for (const file of files) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
 }
 
 // ---------- settings ----------
@@ -653,25 +1089,71 @@ function renderSettings() {
   els.sRepStep.value = s.repStep;
   els.sWeightStep.value = s.weightStep;
   renderExerciseList();
-  const days = new Set(state.sets.map((x) => x.date)).size;
-  els.sStats.textContent = `${state.sets.length} sets over ${days} ${days === 1 ? 'day' : 'days'} stored on this phone · ${pendingCount()} waiting to sync.`;
+  renderActivityList();
+  const days = new Set([...state.sets, ...state.cardio].map((x) => x.date)).size;
+  els.sStats.textContent = `${state.sets.length} sets and ${state.cardio.length} cardio sessions over ${days} ` +
+    `${days === 1 ? 'day' : 'days'} on this phone · ${pendingCount()} waiting to sync.`;
 }
 
 function renderExerciseList() {
   els.sExList.replaceChildren();
-  for (const name of [...state.exercises].sort((a, b) => a.localeCompare(b))) {
-    const li = el('li', null, name);
-    const del = el('button', 'del', '×');
-    del.type = 'button';
-    del.setAttribute('aria-label', `Remove ${name}`);
-    del.addEventListener('click', () => {
-      if (!confirm(`Remove “${name}” from the list? Logged sets are kept.`)) return;
-      state.exercises = state.exercises.filter((e) => e !== name);
+  for (const category of CATEGORIES) {
+    const defs = state.exercises
+      .filter((e) => (CATEGORIES.includes(e.category) ? e.category : 'Custom') === category)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!defs.length) continue;
+    els.sExList.append(el('h4', null, category));
+    const ul = el('ul', 'ex-list');
+    for (const def of defs) {
+      const li = el('li');
+      const name = button('ex-name', def.name, () => editVariations(def));
+      name.append(el('small', null, def.variations.length ? def.variations.join(' · ') : 'Tap to add variations'));
+      const del = button('del', '×', () => {
+        if (!confirm(`Remove “${def.name}” from the list? Logged sets are kept.`)) return;
+        state.exercises = state.exercises.filter((e) => e !== def);
+        persist();
+        renderExerciseList();
+      });
+      del.setAttribute('aria-label', `Remove ${def.name}`);
+      li.append(name, del);
+      ul.append(li);
+    }
+    els.sExList.append(ul);
+  }
+}
+
+function editVariations(def) {
+  const input = prompt(`Variations for ${def.name}, separated by commas`, def.variations.join(', '));
+  if (input == null) return;
+  const seen = new Set();
+  def.variations = input.split(',').map((v) => v.trim().replace(/\s+/g, ' ')).filter((v) => {
+    const key = v.toLowerCase();
+    if (!v || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const c = state.current;
+  if (c.exercise === def.name && c.variation && !def.variations.includes(c.variation)) {
+    c.variation = def.variations[0] || '';
+  }
+  persist();
+  renderExerciseList();
+}
+
+function renderActivityList() {
+  els.sActList.replaceChildren();
+  for (const name of state.activities) {
+    const li = el('li');
+    li.append(el('span', null, name));
+    const del = button('del', '×', () => {
+      if (!confirm(`Remove “${name}”? Logged sessions are kept.`)) return;
+      state.activities = state.activities.filter((a) => a !== name);
       persist();
-      renderExerciseList();
+      renderActivityList();
     });
+    del.setAttribute('aria-label', `Remove ${name}`);
     li.append(del);
-    els.sExList.append(li);
+    els.sActList.append(li);
   }
 }
 
@@ -692,25 +1174,35 @@ function setMsg(node, text, kind = '') {
   node.className = `hint ${kind}`;
 }
 
+function openSettings() {
+  renderSettings();
+  setMsg(els.sTestMsg, state.lastError, state.lastError ? 'error' : '');
+  setMsg(els.sDataMsg, '');
+  els.settings.showModal();
+}
+
 // ---------- startup ----------
 
 function init() {
-  for (const id of ['syncBtn', 'settingsBtn', 'exerciseBtn', 'lastSession', 'reps', 'weight', 'setNum', 'rpe', 'notes',
-    'saveBtn', 'undoBtn', 'today', 'toast', 'toastMsg', 'toastAction', 'picker', 'pickerSearch', 'pickerList',
-    'settings', 'sOwner', 'sRepo', 'sToken', 'sTest', 'sTestMsg', 'sRepStep', 'sWeightStep', 'sNewEx', 'sAddEx',
-    'sExList', 'sStats', 'sExport', 'sRestore', 'sDataMsg']) {
-    els[id] = $(id);
-  }
+  document.querySelectorAll('[id]').forEach((node) => { els[node.id] = node; });
+
+  // A remembered exercise may predate variations; pick a valid one.
+  const c = state.current;
+  const vars = exerciseDef(c.exercise)?.variations || [];
+  if (c.exercise && vars.length && !vars.includes(c.variation)) c.variation = vars[0];
 
   document.querySelectorAll('[data-step]').forEach((b) =>
     b.addEventListener('click', () => step(b.dataset.step, Number(b.dataset.dir))));
-  for (const input of [els.reps, els.weight, els.setNum]) {
+  for (const input of document.querySelectorAll('.stepper input')) {
     input.addEventListener('focus', () => input.select());
     input.addEventListener('change', () => { readForm(); renderForm(); });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
   }
+  els.modeSeg.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  els.cardioSeg.querySelectorAll('[data-cardio]').forEach((b) =>
+    b.addEventListener('click', () => chooseCardioType(b.dataset.cardio)));
 
-  els.saveBtn.addEventListener('click', logSet);
+  els.saveBtn.addEventListener('click', logEntry);
   els.undoBtn.addEventListener('click', undoLast);
   els.exerciseBtn.addEventListener('click', openPicker);
   els.pickerSearch.addEventListener('input', renderPicker);
@@ -740,6 +1232,17 @@ function init() {
   };
   els.sAddEx.addEventListener('click', addFromSettings);
   els.sNewEx.addEventListener('keydown', (e) => { if (e.key === 'Enter') addFromSettings(); });
+  const addActivityFromSettings = () => {
+    const name = els.sNewAct.value.trim().replace(/\s+/g, ' ');
+    if (name && !state.activities.some((a) => a.toLowerCase() === name.toLowerCase())) {
+      state.activities.push(name);
+      persist();
+    }
+    els.sNewAct.value = '';
+    renderActivityList();
+  };
+  els.sAddAct.addEventListener('click', addActivityFromSettings);
+  els.sNewAct.addEventListener('keydown', (e) => { if (e.key === 'Enter') addActivityFromSettings(); });
   els.sExport.addEventListener('click', exportCsv);
   els.sRestore.addEventListener('click', async () => {
     readSettings();
@@ -748,7 +1251,7 @@ function init() {
     setMsg(els.sDataMsg, 'Downloading…');
     try {
       const n = await restoreFromGitHub();
-      setMsg(els.sDataMsg, n ? `Restored ${n} sets.` : 'Nothing new: this phone already has everything.', 'ok');
+      setMsg(els.sDataMsg, n ? `Restored ${n} entries.` : 'Nothing new: this phone already has everything.', 'ok');
       renderSettings();
       renderAll();
     } catch (e) {
@@ -778,15 +1281,9 @@ function init() {
     });
   }
 
+  try { persist(); } catch { /* first-run migration is retried on the next save */ }
   renderAll();
   sync();
-}
-
-function openSettings() {
-  renderSettings();
-  setMsg(els.sTestMsg, state.lastError, state.lastError ? 'error' : '');
-  setMsg(els.sDataMsg, '');
-  els.settings.showModal();
 }
 
 init();

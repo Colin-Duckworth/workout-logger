@@ -24,48 +24,109 @@
   </header>
 
   <main>
-    <section class="card" aria-label="Log a set">
-      <button id="exerciseBtn" class="exercise-btn" type="button">Choose exercise</button>
-      <p id="lastSession" class="hint"></p>
-
-      <div class="field">
-        <label for="reps">Reps</label>
-        <div class="stepper">
-          <button type="button" data-step="reps" data-dir="-1" aria-label="Fewer reps">−</button>
-          <input id="reps" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
-          <button type="button" data-step="reps" data-dir="1" aria-label="More reps">+</button>
-        </div>
+    <section class="card" aria-label="Log">
+      <div id="modeSeg" class="segmented" role="group" aria-label="Workout type">
+        <button type="button" data-mode="weights">Weights</button>
+        <button type="button" data-mode="cardio">Cardio</button>
       </div>
 
-      <div class="field">
-        <label for="weight">Weight (kg)</label>
-        <div class="stepper">
-          <button type="button" data-step="weight" data-dir="-1" aria-label="Less weight">−</button>
-          <input id="weight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
-          <button type="button" data-step="weight" data-dir="1" aria-label="More weight">+</button>
+      <div id="weightsForm" class="form-body">
+        <button id="exerciseBtn" class="exercise-btn" type="button">Choose exercise</button>
+        <div id="variationChips" class="chips" role="group" aria-label="Variation"></div>
+        <p id="lastSession" class="hint"></p>
+
+        <div class="field">
+          <label for="reps">Reps</label>
+          <div class="stepper">
+            <button type="button" data-step="reps" data-dir="-1" aria-label="Fewer reps">−</button>
+            <input id="reps" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="reps" data-dir="1" aria-label="More reps">+</button>
+          </div>
         </div>
+
+        <div class="field">
+          <label for="weight">Weight (kg)</label>
+          <div class="stepper">
+            <button type="button" data-step="weight" data-dir="-1" aria-label="Less weight">−</button>
+            <input id="weight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="weight" data-dir="1" aria-label="More weight">+</button>
+          </div>
+        </div>
+
+        <div class="field inline">
+          <label for="setNum">Set</label>
+          <div class="stepper small">
+            <button type="button" data-step="set" data-dir="-1" aria-label="Previous set number">−</button>
+            <input id="setNum" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="set" data-dir="1" aria-label="Next set number">+</button>
+          </div>
+        </div>
+
+        <details id="more">
+          <summary>RPE &amp; notes <span class="optional">optional</span></summary>
+          <div class="more-body">
+            <label class="text-label">RPE
+              <input id="rpe" class="text-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 8">
+            </label>
+            <label class="text-label">Notes
+              <input id="notes" class="text-input" type="text" autocomplete="off" placeholder="e.g. paused reps, belt">
+            </label>
+          </div>
+        </details>
       </div>
 
-      <div class="field inline">
-        <label for="setNum">Set</label>
-        <div class="stepper small">
-          <button type="button" data-step="set" data-dir="-1" aria-label="Previous set number">−</button>
-          <input id="setNum" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
-          <button type="button" data-step="set" data-dir="1" aria-label="Next set number">+</button>
+      <div id="cardioForm" class="form-body" hidden>
+        <div id="cardioSeg" class="segmented" role="group" aria-label="Cardio type">
+          <button type="button" data-cardio="running">Running</button>
+          <button type="button" data-cardio="stairmaster">Stairmaster</button>
+          <button type="button" data-cardio="other">Other</button>
         </div>
-      </div>
+        <div id="activityChips" class="chips" role="group" aria-label="Activity"></div>
+        <p id="cardioHint" class="hint"></p>
 
-      <details id="more">
-        <summary>RPE &amp; notes <span class="optional">optional</span></summary>
-        <div class="more-body">
-          <label class="text-label">RPE
-            <input id="rpe" class="text-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 8">
-          </label>
-          <label class="text-label">Notes
-            <input id="notes" class="text-input" type="text" autocomplete="off" placeholder="e.g. paused reps, belt">
-          </label>
+        <div class="field">
+          <label for="cDuration">Duration <span class="unit-hint">min, or 32.15 = 32:15</span></label>
+          <div class="stepper">
+            <button type="button" data-step="duration" data-dir="-1" aria-label="Shorter">−</button>
+            <input id="cDuration" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="duration" data-dir="1" aria-label="Longer">+</button>
+          </div>
         </div>
-      </details>
+
+        <div id="distanceField" class="field">
+          <label for="cDistance">Distance (km)</label>
+          <div class="stepper">
+            <button type="button" data-step="distance" data-dir="-1" aria-label="Shorter distance">−</button>
+            <input id="cDistance" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="distance" data-dir="1" aria-label="Longer distance">+</button>
+          </div>
+        </div>
+
+        <div id="floorsField" class="field">
+          <label for="cFloors">Floors climbed</label>
+          <div class="stepper">
+            <button type="button" data-step="floors" data-dir="-1" aria-label="Fewer floors">−</button>
+            <input id="cFloors" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="floors" data-dir="1" aria-label="More floors">+</button>
+          </div>
+        </div>
+
+        <div id="levelField" class="field">
+          <label for="cLevel">Speed level</label>
+          <div class="stepper">
+            <button type="button" data-step="level" data-dir="-1" aria-label="Lower level">−</button>
+            <input id="cLevel" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="level" data-dir="1" aria-label="Higher level">+</button>
+          </div>
+        </div>
+
+        <details>
+          <summary>Notes <span class="optional">optional</span></summary>
+          <div class="more-body">
+            <input id="cNotes" class="text-input" type="text" autocomplete="off" placeholder="e.g. intervals, treadmill" aria-label="Notes">
+          </div>
+        </details>
+      </div>
 
       <button id="saveBtn" class="primary" type="button">Log set</button>
     </section>
@@ -131,7 +192,17 @@
           <input id="sNewEx" class="text-input" type="text" placeholder="New exercise" autocomplete="off" autocapitalize="words" enterkeyhint="done">
           <button id="sAddEx" class="secondary" type="button">Add</button>
         </div>
-        <ul id="sExList" class="ex-list"></ul>
+        <p class="hint">Tap an exercise to edit its variations.</p>
+        <div id="sExList"></div>
+      </section>
+
+      <section class="settings-group">
+        <h3>Other cardio activities</h3>
+        <div class="add-row">
+          <input id="sNewAct" class="text-input" type="text" placeholder="New activity" autocomplete="off" autocapitalize="words" enterkeyhint="done">
+          <button id="sAddAct" class="secondary" type="button">Add</button>
+        </div>
+        <ul id="sActList" class="ex-list"></ul>
       </section>
 
       <section class="settings-group">
