@@ -372,6 +372,24 @@ button.hist-head { padding-right: 16px; }
 .logged-sets .set-row { padding: 0; }
 .logged-sets .set-row:first-child { border-top: 0; }
 .ex-actions { display: flex; justify-content: space-between; }
+.small-hint { margin-top: -8px; font-size: .8rem; }
+
+.set-flags { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.chip.flag { min-height: 48px; }
+.chip.flag[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+
+.set-row.tappable { cursor: pointer; }
+.set-row.warmup .set-n,
+.set-row.warmup .set-main { color: var(--muted); font-weight: 600; }
+.set-row[aria-expanded="true"] { background: var(--surface-2); margin: 0 -8px; padding: 0 0 0 8px; border-radius: 10px 10px 0 0; }
+.set-edit {
+  margin: 0 -8px;
+  padding: 4px 8px 10px 52px;
+  border-radius: 0 0 10px 10px;
+  background: var(--surface-2);
+}
+.set-edit .chip { min-height: 40px; background: var(--surface); }
+.set-edit .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
 
 .set-row {
   display: grid;

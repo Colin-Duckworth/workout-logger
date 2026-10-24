@@ -38,9 +38,12 @@ The home screen has **Start workout**, **Log cardio**, and your **History**.
 - **Start workout** offers a **blank workout** or a template: Push A/B, Pull A/B, Legs A/B, Rehab A/B. Each
   template shows when you last did it.
 - Each exercise is a card with its target (e.g. *Dumbbell · 3 × 6–10 · per arm*) and a progress count. The open
-  card has the variation chips, a "last time" hint, the sets you've logged, and reps/weight steppers.
-- **Log set.** Reps and weight start from what you did last time on that exact exercise + variation. When you hit
+  card has the variation chips, a "last time" hint, the sets you've logged, and weight/reps steppers (weight ±2 kg).
+- **Log set.** Weight and reps start from your last working set on that exact exercise + variation. When you hit
   the target number of sets, the next unfinished exercise opens. Tap any card to jump to it.
+- **Warm-up** and **To failure** toggles above Log set apply to the next set only. Warm-up sets show as **W**, aren't
+  numbered, and don't count toward the target, volume, or starting weights. Failure sets show **(F)**. Tap a logged
+  set to flag or unflag it afterwards; the working sets renumber themselves.
 - **Swap exercise** (e.g. back squat → hack squat) or **Remove** it while it has no sets. **+ Add exercise** adds
   anything. **+ Variation** adds your own variation.
 - Tap the workout name to rename it. **‹** goes home and leaves the workout running; home shows **Resume**.
@@ -101,9 +104,11 @@ so your edit stays unless you also change that entry on the phone.
 | `workout` | `Push A` | workout name, so the file reads on its own |
 | `exercise` | `Bench Press` | |
 | `variation` | `Dumbbell` | blank for exercises without variations |
-| `set_number` | `3` | per exercise within the workout |
+| `set_number` | `3` | working sets 1, 2, 3… per exercise within the workout; blank for warm-ups |
 | `reps` | `5` | |
 | `weight_kg` | `82.5` | `0` for bodyweight movements |
+| `warmup` | `false` | `true` for warm-up sets |
+| `failure` | `false` | `true` for sets taken to failure |
 | `rpe` | `8` | optional, blank if not entered |
 | `notes` | `paused` | optional |
 

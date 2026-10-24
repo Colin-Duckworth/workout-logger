@@ -127,6 +127,16 @@
       <div id="variationChips" class="chips" role="group" aria-label="Variation"></div>
       <p id="lastSession" class="hint"></p>
       <div id="loggedSets" class="logged-sets"></div>
+      <p id="loggedHint" class="hint small-hint">Tap a set to mark it as a warm-up or to failure.</p>
+
+      <div class="field">
+        <label for="weight">Weight (kg)</label>
+        <div class="stepper">
+          <button type="button" data-step="weight" data-dir="-1" aria-label="Less weight">−</button>
+          <input id="weight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+          <button type="button" data-step="weight" data-dir="1" aria-label="More weight">+</button>
+        </div>
+      </div>
 
       <div class="field">
         <label for="reps">Reps</label>
@@ -137,13 +147,9 @@
         </div>
       </div>
 
-      <div class="field">
-        <label for="weight">Weight (kg)</label>
-        <div class="stepper">
-          <button type="button" data-step="weight" data-dir="-1" aria-label="Less weight">−</button>
-          <input id="weight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
-          <button type="button" data-step="weight" data-dir="1" aria-label="More weight">+</button>
-        </div>
+      <div class="set-flags" role="group" aria-label="This set">
+        <button id="flagWarmup" class="chip flag" type="button" aria-pressed="false">Warm-up</button>
+        <button id="flagFailure" class="chip flag" type="button" aria-pressed="false">To failure</button>
       </div>
 
       <details id="more">

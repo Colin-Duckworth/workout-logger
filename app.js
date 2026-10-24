@@ -16,7 +16,7 @@
 
 const WORKOUT_COLUMNS = ['id', 'date', 'name', 'template', 'started_at', 'ended_at', 'duration_min'];
 const SET_COLUMNS = ['id', 'timestamp', 'date', 'workout_id', 'workout', 'exercise', 'variation', 'set_number', 'reps',
-  'weight_kg', 'rpe', 'notes'];
+  'weight_kg', 'warmup', 'failure', 'rpe', 'notes'];
 const CARDIO_COLUMNS = ['id', 'timestamp', 'date', 'activity', 'duration_min', 'distance_km', 'floors', 'level', 'notes'];
 
 const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core', 'Rehab', 'Custom'];
@@ -160,7 +160,8 @@ const DEFAULT_SETTINGS = {
   branch: 'main',
   token: '',
   repStep: 1,
-  weightStep: 2.5,
+  weightStep: 2,
+  version: 2,
 };
 
 const KEY = {
@@ -203,6 +204,16 @@ function loadExercises() {
   return list;
 }
 
+function loadSettings() {
+  const s = { ...DEFAULT_SETTINGS, version: 1, ...load(KEY.settings, {}) };
+  // Version 1 defaulted the weight step to 2.5 kg; move that default to 2 kg once, keeping any other choice.
+  if (s.version < 2) {
+    if (s.weightStep === 2.5) s.weightStep = 2;
+    s.version = 2;
+  }
+  return s;
+}
+
 // Add new catalogue exercises and variations without undoing your own edits.
 function mergeDefaults(list) {
   for (const def of DEFAULT_EXERCISES) {
@@ -219,7 +230,7 @@ const state = {
   tombstones: load(KEY.tombstones, []).map((t) => ({ kind: 'strength', ...t })), // deleted, not yet removed from GitHub
   exercises: loadExercises(),             // [{name, category, variations}]
   activities: load(KEY.activities, DEFAULT_ACTIVITIES.slice()), // "Other" cardio activities
-  settings: { ...DEFAULT_SETTINGS, ...load(KEY.settings, {}) },
+  settings: loadSettings(),
   current: {
     view: 'home',                         // home | workout | cardio
     activeWorkout: null,
@@ -231,7 +242,7 @@ const state = {
     level: 8,
     ...load(KEY.current, {}),
   },
-  ui: { expanded: new Set(), historyLimit: 15 },
+  ui: { expanded: new Set(), historyLimit: 15, editSet: null },
   picker: { mode: 'add', key: null },
   syncing: false,
   syncQueued: false,
@@ -430,9 +441,11 @@ function fromRow(kind, r) {
     workout: r.workout || '',
     exercise: r.exercise,
     variation: r.variation || '',
-    set_number: Number(r.set_number) || 1,
+    set_number: optNum(r.set_number),
     reps: Number(r.reps) || 0,
     weight_kg: Number(r.weight_kg) || 0,
+    warmup: r.warmup === 'true',
+    failure: r.failure === 'true',
     rpe: optNum(r.rpe),
   };
 }
@@ -448,22 +461,30 @@ const activeWorkout = () => state.workouts.find((w) => w.id === state.current.ac
 const workoutSets = (w) => state.sets.filter((s) => s.workout_id === w.id).sort(byTimeAsc);
 const itemSets = (w, item) => workoutSets(w).filter((s) => s.item === item.key);
 const focusedItem = (w) => (w ? w.items.find((i) => i.key === w.focus) || null : null);
-const itemDone = (w, item) => (item.sets ? itemSets(w, item).length >= item.sets : itemSets(w, item).length > 0);
+// Warm-ups are logged but don't count toward targets, set numbers, volume or starting weights.
+const isWorking = (s) => !s.warmup;
+const workingSets = (sets) => sets.filter(isWorking);
+const itemDone = (w, item) => {
+  const n = workingSets(itemSets(w, item)).length;
+  return item.sets ? n >= item.sets : n > 0;
+};
+const volumeOf = (sets) => sum(workingSets(sets), (s) => s.reps * s.weight_kg);
 
-// The most recent day this exercise + variation was done, outside the given workout.
+// The most recent day this exercise + variation was done (working sets), outside the given workout.
 function lastSession(exercise, variation, excludeWorkoutId) {
-  const matches = state.sets.filter((s) => sameLift(s, exercise, variation) && s.workout_id !== excludeWorkoutId);
+  const matches = state.sets.filter((s) => isWorking(s) && sameLift(s, exercise, variation) && s.workout_id !== excludeWorkoutId);
   let date = null;
   for (const s of matches) if (!date || s.date > date) date = s.date;
   if (!date) return null;
   return { date, sets: matches.filter((s) => s.date === date).sort(byTimeAsc) };
 }
 
-// Latest set of an exercise; pass a variation to narrow it down.
-function latestSet(exercise, variation) {
+// Latest set of an exercise; pass a variation to narrow it down, workingOnly to skip warm-ups.
+function latestSet(exercise, variation, workingOnly = false) {
   let latest = null;
   for (const s of state.sets) {
     if (s.exercise !== exercise || (variation !== undefined && (s.variation || '') !== variation)) continue;
+    if (workingOnly && !isWorking(s)) continue;
     if (!latest || s.timestamp > latest.timestamp) latest = s;
   }
   return latest;
@@ -507,7 +528,14 @@ function describeCardio(e) {
   return parts.join(' · ');
 }
 
-const setsText = (sets) => `${sets.map((s) => `${s.reps}×${fmtNum(s.weight_kg)}`).join(', ')} kg`;
+// Weight first, matching the logger: "34 kg × 5". (F) marks a set taken to failure.
+const setText = (s) => `${fmtNum(s.weight_kg)} kg × ${s.reps}${s.failure ? ' (F)' : ''}`;
+
+function setsText(sets) {
+  const working = workingSets(sets);
+  const warmups = sets.length - working.length;
+  return [working.map(setText).join(', '), warmups && `+${warmups} warm-up`].filter(Boolean).join(' · ');
+}
 
 const pendingCount = () =>
   Object.keys(TABLES).reduce((n, kind) => n + entries(kind).filter((e) => e.dirty).length, 0) + state.tombstones.length;
@@ -561,7 +589,7 @@ function renderHome() {
   els.activeCard.hidden = !w;
   els.startBtn.hidden = !!w;
   if (w) {
-    const n = workoutSets(w).length;
+    const n = workingSets(workoutSets(w)).length;
     els.activeName.textContent = w.name;
     els.activeMeta.textContent = `${fmtDate(w.date)} · started ${fmtTime(w.started_at)} · ${n} ${n === 1 ? 'set' : 'sets'}`;
     els.activeCancelBtn.textContent = isReopened(w) ? 'Close' : 'Cancel';
@@ -617,8 +645,8 @@ function historyWorkout({ w, sets }) {
   info.append(el('strong', null, w ? w.name : 'Sets'),
     el('small', null, [fmtDate(date), w && fmtTime(w.started_at), w && w.duration_min ? `${w.duration_min} min` : '']
       .filter(Boolean).join(' · ')));
-  const volume = sum(sets, (s) => s.reps * s.weight_kg);
-  head.append(info, el('span', 'hist-stat', `${sets.length} ${sets.length === 1 ? 'set' : 'sets'} · ${fmtNum(volume)} kg`));
+  const n = workingSets(sets).length;
+  head.append(info, el('span', 'hist-stat', `${n} ${n === 1 ? 'set' : 'sets'} · ${fmtNum(volumeOf(sets))} kg`));
   card.append(head);
 
   if (open) {
@@ -669,6 +697,7 @@ function renderWorkout() {
   if (!w.items.length) els.exerciseList.append(el('p', 'empty-note', 'No exercises yet. Add one below.'));
   w.items.forEach((item, i) => {
     const sets = itemSets(w, item);
+    const working = workingSets(sets).length;
     const current = item.key === w.focus;
     const card = el('div', `ex-card${current ? ' current' : ''}${itemDone(w, item) ? ' done' : ''}`);
     card.dataset.key = item.key;
@@ -680,7 +709,7 @@ function renderWorkout() {
     info.append(el('strong', null, item.exercise));
     if (target) info.append(el('small', null, target));
     head.append(el('span', 'ex-num', itemDone(w, item) ? '✓' : String(i + 1)), info,
-      el('span', 'ex-progress', item.sets ? `${sets.length}/${item.sets}` : `${sets.length}`));
+      el('span', 'ex-progress', item.sets ? `${working}/${item.sets}` : `${working}`));
     card.append(head);
 
     if (current) card.append(els.setLogger);
@@ -694,11 +723,11 @@ function renderWorkout() {
 function renderWorkoutMeta() {
   const w = activeWorkout();
   if (!w) return;
-  const sets = workoutSets(w);
+  const n = workingSets(workoutSets(w)).length;
   const minutes = Math.max(0, Math.round((Date.now() - new Date(w.started_at)) / 60000));
   const live = w.date === today() && !w.ended_at;
   els.wMeta.textContent = [fmtDate(w.date), `started ${fmtTime(w.started_at)}`, live ? `${minutes} min` : '',
-    `${sets.length} ${sets.length === 1 ? 'set' : 'sets'}`].filter(Boolean).join(' · ');
+    `${n} ${n === 1 ? 'set' : 'sets'}`].filter(Boolean).join(' · ');
 }
 
 // The set logger is one fixed block that moves into whichever exercise card is open,
@@ -721,16 +750,20 @@ function renderLogger() {
     : `First time logging ${item.variation ? `${item.exercise} · ${item.variation}` : item.exercise}.`;
 
   els.loggedSets.replaceChildren();
-  for (const s of sets) els.loggedSets.append(setRow(s, item));
+  for (const s of sets) els.loggedSets.append(...setRow(s, item));
+  els.loggedHint.hidden = !sets.length;
 
   setInput(els.reps, item.draft.reps);
   setInput(els.weight, fmtNum(item.draft.weight));
-  els.logSetBtn.textContent = `Log set ${nextSetNumber(sets)}`;
+  els.flagWarmup.setAttribute('aria-pressed', String(!!item.draft.warmup));
+  els.flagFailure.setAttribute('aria-pressed', String(!!item.draft.failure));
+  els.logSetBtn.textContent = item.draft.warmup ? 'Log warm-up set' : `Log set ${nextSetNumber(sets)}`;
   els.swapBtn.hidden = sets.length > 0;
   els.removeItemBtn.hidden = sets.length > 0;
 }
 
-const nextSetNumber = (sets) => (sets.length ? Math.max(...sets.map((s) => Number(s.set_number) || 0)) + 1 : 1);
+// Working sets are numbered 1, 2, 3…; warm-ups get no number.
+const nextSetNumber = (sets) => Math.max(0, ...workingSets(sets).map((s) => Number(s.set_number) || 0)) + 1;
 
 function pendingDot(e) {
   const dot = el('span', e.dirty ? 'dot pending' : 'dot');
@@ -738,18 +771,36 @@ function pendingDot(e) {
   return dot;
 }
 
+// A logged set; tapping it opens warm-up / failure toggles underneath.
 function setRow(s, item) {
-  const row = el('div', 'set-row');
+  const editing = state.ui.editSet === s.id;
+  const row = el('div', `set-row tappable${s.warmup ? ' warmup' : ''}`);
+  row.setAttribute('role', 'button');
+  row.setAttribute('aria-expanded', String(editing));
+  row.addEventListener('click', () => {
+    state.ui.editSet = editing ? null : s.id;
+    renderLogger();
+  });
   const meta = [
     (s.variation || '') !== (item.variation || '') ? s.variation : '',
+    s.warmup ? 'Warm-up' : '',
+    s.failure ? 'Failure' : '',
     s.rpe !== '' && s.rpe != null ? `RPE ${s.rpe}` : '',
     s.notes,
   ].filter(Boolean).join(' · ');
-  const del = button('del', '×', () => deleteEntry('strength', s.id, { confirm: true }));
-  del.setAttribute('aria-label', `Delete set ${s.set_number}`);
-  row.append(el('span', 'set-n', `#${s.set_number}`), el('span', 'set-main', `${s.reps} × ${fmtNum(s.weight_kg)} kg`),
+  const del = button('del', '×', (e) => {
+    e.stopPropagation();
+    deleteEntry('strength', s.id, { confirm: true });
+  });
+  del.setAttribute('aria-label', s.warmup ? 'Delete warm-up set' : `Delete set ${s.set_number}`);
+  row.append(el('span', 'set-n', s.warmup ? 'W' : `#${s.set_number}`), el('span', 'set-main', `${fmtNum(s.weight_kg)} kg × ${s.reps}`),
     el('span', 'set-meta', meta), pendingDot(s), del);
-  return row;
+  if (!editing) return [row];
+
+  const edit = el('div', 'set-edit chips');
+  edit.append(chip('Warm-up', !!s.warmup, () => toggleSetFlag(s.id, 'warmup')),
+    chip('To failure', !!s.failure, () => toggleSetFlag(s.id, 'failure')));
+  return [row, edit];
 }
 
 // ----- cardio -----
@@ -816,12 +867,15 @@ function hideToast() { els.toast.hidden = true; }
 
 // ---------- workout actions ----------
 
-// Starting reps/weight: what you did last time on this exercise + variation, else the bottom of the target range.
+// Starting weight/reps: your last working set on this exercise + variation, else the bottom of the target range.
+// The warm-up and failure toggles always start off.
 function draftFor(item) {
-  const last = latestSet(item.exercise, item.variation);
+  const last = latestSet(item.exercise, item.variation, true);
   return {
     reps: last ? Number(last.reps) : parseInt(item.reps, 10) || 8,
     weight: last ? Number(last.weight_kg) : 0,
+    warmup: false,
+    failure: false,
   };
 }
 
@@ -973,6 +1027,7 @@ function logSet() {
   if (!Number.isFinite(weight) || weight < 0) return toast('Weight must be a number', { error: true });
   const rpe = parseNum(els.rpe.value);
   const done = itemSets(w, item);
+  const warmup = !!item.draft.warmup;
 
   const set = {
     id: uuid(),
@@ -983,18 +1038,20 @@ function logSet() {
     item: item.key, // local only: which card in the workout it belongs to
     exercise: item.exercise,
     variation: item.variation || '',
-    set_number: nextSetNumber(done),
+    set_number: warmup ? '' : nextSetNumber(done),
     reps,
     weight_kg: weight,
+    warmup,
+    failure: !!item.draft.failure,
     rpe: Number.isFinite(rpe) ? rpe : '',
     notes: els.notes.value.trim(),
     dirty: true,
   };
 
-  // Hit the target number of sets? Open the next exercise.
-  let message = `Set ${set.set_number} logged: ${reps} × ${fmtNum(weight)} kg`;
+  // Hit the target number of working sets? Open the next exercise.
+  let message = `${warmup ? 'Warm-up' : `Set ${set.set_number}`} logged: ${setText(set)}`;
   const previousFocus = w.focus;
-  if (item.sets && done.length + 1 >= item.sets) {
+  if (!warmup && item.sets && workingSets(done).length + 1 >= item.sets) {
     const next = nextUnfinished(w, item);
     w.focus = next ? next.key : null;
     message += next ? ` · next: ${next.exercise}` : ' · all exercises done!';
@@ -1004,7 +1061,45 @@ function logSet() {
   if (!ok) { w.focus = previousFocus; return; }
   els.rpe.value = '';
   els.notes.value = '';
+  item.draft.warmup = false; // toggles apply to one set at a time
+  item.draft.failure = false;
+  persistQuietly();
+  renderLogger();
   if (w.focus !== previousFocus) scrollToItem(w.focus);
+}
+
+function toggleDraftFlag(flag) {
+  const item = focusedItem(activeWorkout());
+  if (!item) return;
+  readLogger();
+  item.draft[flag] = !item.draft[flag];
+  persistQuietly();
+  renderLogger();
+}
+
+// Flag (or unflag) a set that's already logged, e.g. marking the first set as a warm-up afterwards.
+function toggleSetFlag(id, flag) {
+  const s = state.sets.find((x) => x.id === id);
+  if (!s) return;
+  s[flag] = !s[flag];
+  s.dirty = true;
+  renumber(s);
+  try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
+  renderWorkout();
+  sync();
+}
+
+// Keep working sets numbered 1, 2, 3… in logged order after a set is flagged or deleted.
+function renumber(s) {
+  if (!s.workout_id) return;
+  const siblings = state.sets
+    .filter((x) => x.workout_id === s.workout_id && (s.item ? x.item === s.item : sameLift(x, s.exercise, s.variation)))
+    .sort(byTimeAsc);
+  let n = 0;
+  for (const x of siblings) {
+    const number = x.warmup ? '' : ++n;
+    if (x.set_number !== number) { x.set_number = number; x.dirty = true; }
+  }
 }
 
 function finishWorkout() {
@@ -1023,8 +1118,7 @@ function finishWorkout() {
     w.ended_at = localIso(end);
     w.duration_min = Math.max(1, Math.round((end - new Date(w.started_at)) / 60000));
     w.dirty = true;
-    const volume = sum(sets, (s) => s.reps * s.weight_kg);
-    toast(`${w.name} done: ${sets.length} sets · ${fmtNum(volume)} kg · ${w.duration_min} min`);
+    toast(`${w.name} done: ${workingSets(sets).length} sets · ${fmtNum(volumeOf(sets))} kg · ${w.duration_min} min`);
   }
   state.current.activeWorkout = null;
   try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
@@ -1117,11 +1211,12 @@ function deleteEntry(kind, id, { confirm: ask = false } = {}) {
   const e = entries(kind).find((x) => x.id === id);
   if (!e) return;
   const what = kind === 'strength'
-    ? `${liftName(e)} set #${e.set_number} (${e.reps} × ${fmtNum(e.weight_kg)} kg)`
+    ? `${liftName(e)} ${e.warmup ? 'warm-up set' : `set #${e.set_number}`} (${setText(e)})`
     : `${e.activity} (${describeCardio(e)})`;
   if (ask && !confirm(`Delete ${what}?`)) return;
   state[TABLES[kind].key] = entries(kind).filter((x) => x.id !== id);
   state.tombstones.push({ id, date: e.date, kind });
+  if (kind === 'strength') renumber(e);
   try { persist(); } catch (err) { return toast(`Could not save: ${err.message}`, { error: true }); }
   renderAll();
   toast(kind === 'strength' ? 'Set deleted' : 'Session deleted');
@@ -1656,6 +1751,8 @@ function init() {
   els.cancelWorkoutBtn.addEventListener('click', cancelWorkout);
   els.addExerciseBtn.addEventListener('click', () => openPicker('add'));
   els.logSetBtn.addEventListener('click', logSet);
+  els.flagWarmup.addEventListener('click', () => toggleDraftFlag('warmup'));
+  els.flagFailure.addEventListener('click', () => toggleDraftFlag('failure'));
   els.swapBtn.addEventListener('click', () => openPicker('swap', activeWorkout().focus));
   els.removeItemBtn.addEventListener('click', removeItem);
 
