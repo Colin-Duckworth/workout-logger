@@ -1,22 +1,25 @@
 'use strict';
 
 /*
- * Workout Log: an offline-first logger for weight training sets and cardio.
+ * Workout Log: an offline-first logger for workouts (sets grouped into workouts,
+ * optionally started from a template) and cardio sessions.
  *
- * Every entry is saved to localStorage the moment it's logged; that copy on the
- * phone is the source of truth. Entries are then synced to monthly CSV files in a
+ * Everything is saved to localStorage the moment it's logged; that copy on the
+ * phone is the source of truth. Entries then sync to monthly CSV files in a
  * private GitHub repo through the Contents API:
- *   sets/YYYY-MM.csv    one row per weight-training set
- *   cardio/YYYY-MM.csv  one row per cardio session
- * Each entry carries a UUID, so a sync merges by id: retries never duplicate
- * rows, and anything already in the file (e.g. edits made on a computer)
- * is preserved.
+ *   workouts/YYYY-MM.csv  one row per workout (date, name, template, start/end)
+ *   sets/YYYY-MM.csv      one row per set, tagged with its workout
+ *   cardio/YYYY-MM.csv    one row per cardio session
+ * Each row carries a UUID, so a sync merges by id: retries never duplicate rows,
+ * and anything already in the file (e.g. edits made on a computer) is preserved.
  */
 
-const SET_COLUMNS = ['id', 'timestamp', 'date', 'exercise', 'variation', 'set_number', 'reps', 'weight_kg', 'rpe', 'notes'];
+const WORKOUT_COLUMNS = ['id', 'date', 'name', 'template', 'started_at', 'ended_at', 'duration_min'];
+const SET_COLUMNS = ['id', 'timestamp', 'date', 'workout_id', 'workout', 'exercise', 'variation', 'set_number', 'reps',
+  'weight_kg', 'rpe', 'notes'];
 const CARDIO_COLUMNS = ['id', 'timestamp', 'date', 'activity', 'duration_min', 'distance_km', 'floors', 'level', 'notes'];
 
-const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core', 'Custom'];
+const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core', 'Rehab', 'Custom'];
 
 const PRESS = ['Barbell', 'Dumbbell', 'Smith Machine', 'Machine'];
 const BODYWEIGHT = ['Bodyweight', 'Weighted', 'Assisted'];
@@ -34,17 +37,20 @@ const DEFAULT_EXERCISES = [
   ['Dip', 'Push', BODYWEIGHT],
   ['Push-up', 'Push', ['Bodyweight', 'Weighted']],
   ['Chest Fly', 'Push', ['Dumbbell', 'Cable', 'Machine']],
+  ['Pec Deck', 'Push', []],
   ['Lateral Raise', 'Push', ['Dumbbell', 'Cable', 'Machine']],
   ['Front Raise', 'Push', ['Dumbbell', 'Cable', 'Plate']],
   ['Pull-up', 'Pull', BODYWEIGHT],
   ['Chin-up', 'Pull', BODYWEIGHT],
   ['Lat Pulldown', 'Pull', ['Wide Grip', 'Close Grip', 'Neutral Grip', 'Single-Arm']],
-  ['Row', 'Pull', ['Barbell', 'Dumbbell', 'Seated Cable', 'Machine', 'T-Bar', 'Chest-Supported']],
+  ['Row', 'Pull', ['Barbell', 'Dumbbell', 'Seated Cable', 'Single-Arm Cable', 'Machine', 'T-Bar', 'Chest-Supported']],
   ['Face Pull', 'Pull', []],
   ['Rear Delt Fly', 'Pull', ['Dumbbell', 'Cable', 'Machine']],
+  ['Reverse Pec Deck', 'Pull', []],
   ['Shrug', 'Pull', ['Barbell', 'Dumbbell', 'Trap Bar']],
   ['Straight-Arm Pulldown', 'Pull', []],
   ['Squat', 'Legs', ['Back', 'Front', 'Goblet', 'Smith Machine']],
+  ['Hack Squat', 'Legs', []],
   ['Deadlift', 'Legs', ['Conventional', 'Sumo', 'Trap Bar']],
   ['Romanian Deadlift', 'Legs', ['Barbell', 'Dumbbell']],
   ['Single-Leg RDL', 'Legs', ['Dumbbell', 'Kettlebell', 'Barbell', 'Bodyweight']],
@@ -52,14 +58,13 @@ const DEFAULT_EXERCISES = [
   ['Lunge', 'Legs', ['Dumbbell', 'Barbell', 'Bodyweight']],
   ['Step-up', 'Legs', ['Dumbbell', 'Barbell', 'Bodyweight']],
   ['Leg Press', 'Legs', []],
-  ['Hack Squat', 'Legs', []],
   ['Leg Extension', 'Legs', []],
   ['Leg Curl', 'Legs', ['Lying', 'Seated']],
   ['Hip Thrust', 'Legs', ['Barbell', 'Machine', 'Smith Machine']],
   ['Good Morning', 'Legs', []],
   ['Hip Abduction', 'Legs', []],
   ['Calf Raise', 'Legs', ['Standing', 'Seated', 'Leg Press']],
-  ['Bicep Curl', 'Arms', ['Dumbbell', 'Barbell', 'EZ Bar', 'Cable']],
+  ['Bicep Curl', 'Arms', ['Dumbbell', 'Incline Dumbbell', 'Barbell', 'EZ Bar', 'Cable']],
   ['Hammer Curl', 'Arms', ['Dumbbell', 'Cable']],
   ['Preacher Curl', 'Arms', ['EZ Bar', 'Dumbbell', 'Machine']],
   ['Tricep Pushdown', 'Arms', ['Rope', 'Straight Bar', 'V-Bar']],
@@ -68,10 +73,83 @@ const DEFAULT_EXERCISES = [
   ['Hanging Leg Raise', 'Core', []],
   ['Cable Crunch', 'Core', []],
   ['Ab Wheel', 'Core', []],
+  ['Pallof Press', 'Core', ['Cable', 'Band']],
+  ['Nordic Curl', 'Rehab', ['Bodyweight', 'Band-Assisted']],
+  ['Hamstring Slider Curl', 'Rehab', []],
+  ['45° Back Extension', 'Rehab', []],
+  ['External Rotation', 'Rehab', ['Cable', 'Side-Lying Dumbbell', 'Band']],
+  ['Prone Y-T Raise', 'Rehab', []],
+  ['Band Pull-Apart', 'Rehab', []],
 ].map(([name, category, variations]) => ({ name, category, variations }));
+
+// Bumped when DEFAULT_EXERCISES gains entries, so existing phones pick them up once.
+const CATALOG_VERSION = 3;
 
 // Names from the first exercise list that are now variations (Row → Barbell, Bicep Curl → Dumbbell).
 const RETIRED_EXERCISES = ['Barbell Row', 'Dumbbell Curl'];
+
+// Items: [exercise, variation (null = last used, else first listed), sets, reps, note]
+const TEMPLATES = [
+  { group: 'Push', name: 'Push A', focus: 'Incline and shoulder focus', items: [
+    ['Incline Bench Press', 'Dumbbell', 3, '6–10'],
+    ['Overhead Press', 'Seated Dumbbell', 3, '8–12'],
+    ['Pec Deck', null, 3, '10–15'],
+    ['Lateral Raise', 'Cable', 3, '12–20'],
+    ['Overhead Tricep Extension', 'Cable', 3, '10–15'],
+  ] },
+  { group: 'Push', name: 'Push B', focus: 'Flat pressing focus', items: [
+    ['Bench Press', 'Barbell', 3, '5–8'],
+    ['Overhead Press', 'Machine', 3, '8–12'],
+    ['Dip', 'Weighted', 3, '6–12', 'weighted if possible'],
+    ['Lateral Raise', 'Dumbbell', 3, '12–20'],
+    ['Tricep Pushdown', 'Rope', 3, '10–15'],
+  ] },
+  { group: 'Pull', name: 'Pull A', focus: 'Lat focus', items: [
+    ['Lat Pulldown', null, 3, '8–12'],
+    ['Row', 'Chest-Supported', 3, '8–12', 'dumbbell'],
+    ['Row', 'Single-Arm Cable', 3, '10–12', 'per arm'],
+    ['Reverse Pec Deck', null, 3, '12–20'],
+    ['Bicep Curl', 'Incline Dumbbell', 3, '10–15'],
+  ] },
+  { group: 'Pull', name: 'Pull B', focus: 'Upper back focus', items: [
+    ['Pull-up', 'Bodyweight', 3, '5–10'],
+    ['Row', 'Barbell', 3, '6–10'],
+    ['Face Pull', null, 3, '15–20'],
+    ['Straight-Arm Pulldown', null, 2, '12–15'],
+    ['Hammer Curl', 'Dumbbell', 3, '10–15'],
+  ] },
+  { group: 'Legs', name: 'Legs A', focus: 'Squat and hinge focus', items: [
+    ['Squat', 'Back', 3, '5–8', 'or hack squat'],
+    ['Single-Leg RDL', 'Kettlebell', 3, '8–10', 'per leg'],
+    ['Leg Extension', null, 3, '10–15'],
+    ['Leg Curl', 'Seated', 3, '10–15'],
+    ['Calf Raise', 'Standing', 3, '10–15'],
+  ] },
+  { group: 'Legs', name: 'Legs B', focus: 'Unilateral focus', items: [
+    ['Bulgarian Split Squat', null, 3, '8–12', 'per leg'],
+    ['Hip Thrust', null, 3, '8–12'],
+    ['Leg Press', null, 3, '10–15'],
+    ['Leg Curl', 'Lying', 3, '10–15'],
+    ['Calf Raise', 'Seated', 3, '12–20'],
+  ] },
+  { group: 'Rehab', name: 'Rehab A', focus: 'Eccentric hamstrings, rotator cuff, core', items: [
+    ['Nordic Curl', null, 3, '3–6', 'slow lowering, band-assist if needed'],
+    ['Ab Wheel', null, 3, '6–12'],
+    ['Face Pull', null, 3, '15–20'],
+    ['External Rotation', 'Cable', 3, '12–15', 'per arm'],
+    ['Prone Y-T Raise', null, 2, '10', 'each'],
+  ] },
+  { group: 'Rehab', name: 'Rehab B', focus: 'Lighter hamstrings, scapular stability, anti-rotation core', items: [
+    ['Hamstring Slider Curl', null, 3, '8–12'],
+    ['45° Back Extension', null, 3, '10–15', 'rounded back to bias hamstrings'],
+    ['Band Pull-Apart', null, 3, '15–25'],
+    ['External Rotation', 'Side-Lying Dumbbell', 3, '12–15', 'per arm'],
+    ['Pallof Press', null, 3, '10–12', 'per side'],
+  ] },
+].map((t) => ({
+  ...t,
+  items: t.items.map(([exercise, variation, sets, reps, note = '']) => ({ exercise, variation, sets, reps, note })),
+}));
 
 const CARDIO_TYPES = { running: 'Running', stairmaster: 'Stairmaster' };
 const DEFAULT_ACTIVITIES = ['Basketball', 'Swimming', 'Padel', 'Soccer', 'Cycling', 'Tennis', 'Hiking', 'Rowing', 'Climbing', 'Yoga'];
@@ -86,11 +164,13 @@ const DEFAULT_SETTINGS = {
 };
 
 const KEY = {
+  workouts: 'wl.workouts',
   sets: 'wl.sets',
   cardio: 'wl.cardio',
   tombstones: 'wl.tombstones',
   exercises: 'wl.exercises.v2',
   legacyExercises: 'wl.exercises',
+  catalogVersion: 'wl.catalogVersion',
   activities: 'wl.activities',
   settings: 'wl.settings',
   current: 'wl.current',
@@ -107,10 +187,13 @@ function load(key, fallback) {
   }
 }
 
-// First run on v2: start from the new catalogue and keep any exercises you added yourself.
 function loadExercises() {
   const saved = load(KEY.exercises, null);
-  if (saved) return saved;
+  if (saved) {
+    if (load(KEY.catalogVersion, 2) < CATALOG_VERSION) mergeDefaults(saved);
+    return saved;
+  }
+  // First run on v2+: start from the catalogue and keep any exercises added to the v1 list.
   const list = DEFAULT_EXERCISES.map((e) => ({ ...e, variations: [...e.variations] }));
   for (const name of load(KEY.legacyExercises, [])) {
     if (typeof name === 'string' && !RETIRED_EXERCISES.includes(name) && !list.some((e) => e.name === name)) {
@@ -120,20 +203,26 @@ function loadExercises() {
   return list;
 }
 
+// Add new catalogue exercises and variations without undoing your own edits.
+function mergeDefaults(list) {
+  for (const def of DEFAULT_EXERCISES) {
+    const mine = list.find((e) => e.name.toLowerCase() === def.name.toLowerCase());
+    if (!mine) list.push({ ...def, variations: [...def.variations] });
+    else def.variations.forEach((v) => { if (!mine.variations.includes(v)) mine.variations.push(v); });
+  }
+}
+
 const state = {
-  sets: load(KEY.sets, []),               // weight-training sets on (or restored to) this device
+  workouts: load(KEY.workouts, []),       // [{id, date, name, template, started_at, ended_at, duration_min, items, focus}]
+  sets: load(KEY.sets, []),               // weight-training sets, each tagged with workout_id
   cardio: load(KEY.cardio, []),           // cardio sessions
   tombstones: load(KEY.tombstones, []).map((t) => ({ kind: 'strength', ...t })), // deleted, not yet removed from GitHub
   exercises: loadExercises(),             // [{name, category, variations}]
   activities: load(KEY.activities, DEFAULT_ACTIVITIES.slice()), // "Other" cardio activities
   settings: { ...DEFAULT_SETTINGS, ...load(KEY.settings, {}) },
   current: {
-    mode: 'weights',
-    exercise: '',
-    variation: '',
-    reps: 5,
-    weight: 20,
-    setNumber: null,
+    view: 'home',                         // home | workout | cardio
+    activeWorkout: null,
     cardioType: 'running',
     activity: 'Basketball',
     duration: 30,
@@ -142,14 +231,17 @@ const state = {
     level: 8,
     ...load(KEY.current, {}),
   },
+  ui: { expanded: new Set(), historyLimit: 15 },
+  picker: { mode: 'add', key: null },
   syncing: false,
   syncQueued: false,
   noSignal: false,
   lastError: '',
 };
 
-// The two record types and where each one syncs to.
+// The record types and where each one syncs to (workouts first, so a workout lands before its sets).
 const TABLES = {
+  workouts: { key: 'workouts', dir: 'workouts', columns: WORKOUT_COLUMNS },
   strength: { key: 'sets', dir: 'sets', columns: SET_COLUMNS },
   cardio: { key: 'cardio', dir: 'cardio', columns: CARDIO_COLUMNS },
 };
@@ -157,17 +249,20 @@ const entries = (kind) => state[TABLES[kind].key];
 
 // Throws if storage is full/blocked so callers can tell the user instead of silently losing an entry.
 function persist() {
+  localStorage.setItem(KEY.workouts, JSON.stringify(state.workouts));
   localStorage.setItem(KEY.sets, JSON.stringify(state.sets));
   localStorage.setItem(KEY.cardio, JSON.stringify(state.cardio));
   localStorage.setItem(KEY.tombstones, JSON.stringify(state.tombstones));
   localStorage.setItem(KEY.exercises, JSON.stringify(state.exercises));
+  localStorage.setItem(KEY.catalogVersion, JSON.stringify(CATALOG_VERSION));
   localStorage.setItem(KEY.activities, JSON.stringify(state.activities));
   localStorage.setItem(KEY.settings, JSON.stringify(state.settings));
   localStorage.setItem(KEY.current, JSON.stringify(state.current));
 }
 
-function saveCurrent() {
-  try { localStorage.setItem(KEY.current, JSON.stringify(state.current)); } catch { /* form state only */ }
+// For in-progress edits (drafts, focus, view) where a failed write isn't worth an error.
+function persistQuietly() {
+  try { persist(); } catch { /* retried on the next real save */ }
 }
 
 // ---------- helpers ----------
@@ -191,6 +286,7 @@ function localIso(d = new Date()) {
 }
 
 const today = () => localDate();
+const fmtTime = (iso) => String(iso).slice(11, 16);
 
 function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -259,6 +355,7 @@ function button(cls, text, onClick) {
 
 const byTimeDesc = (a, b) => String(b.timestamp).localeCompare(String(a.timestamp));
 const byTimeAsc = (a, b) => String(a.timestamp).localeCompare(String(b.timestamp));
+const sum = (list, f) => list.reduce((total, x) => total + f(x), 0);
 
 // ---------- CSV ----------
 
@@ -299,8 +396,23 @@ function parseCsv(text) {
 }
 
 const toRow = (columns, e) => Object.fromEntries(columns.map((c) => [c, e[c]]));
+// Workouts have no timestamp column; sort them by start time like everything else.
+const rowTime = (r) => r.timestamp || r.started_at || '';
 
 function fromRow(kind, r) {
+  if (kind === 'workouts') {
+    return {
+      id: r.id,
+      date: r.date,
+      name: r.name,
+      template: r.template || '',
+      started_at: r.started_at,
+      ended_at: r.ended_at || '',
+      duration_min: optNum(r.duration_min),
+      items: [],
+      focus: null,
+    };
+  }
   const base = { id: r.id, timestamp: r.timestamp, date: r.date, notes: r.notes || '' };
   if (kind === 'cardio') {
     return {
@@ -314,6 +426,8 @@ function fromRow(kind, r) {
   }
   return {
     ...base,
+    workout_id: r.workout_id || '',
+    workout: r.workout || '',
     exercise: r.exercise,
     variation: r.variation || '',
     set_number: Number(r.set_number) || 1,
@@ -328,31 +442,21 @@ function fromRow(kind, r) {
 const exerciseDef = (name) => state.exercises.find((e) => e.name === name);
 const liftName = (s) => (s.variation ? `${s.exercise} · ${s.variation}` : s.exercise);
 const sameLift = (s, exercise, variation) => s.exercise === exercise && (s.variation || '') === (variation || '');
+const categoryOf = (def) => (CATEGORIES.includes(def.category) ? def.category : 'Custom');
 
-// Sets on a date, optionally only one exercise + variation.
-const setsOn = (date, exercise, variation) =>
-  state.sets.filter((s) => s.date === date && (exercise === undefined || sameLift(s, exercise, variation)));
+const activeWorkout = () => state.workouts.find((w) => w.id === state.current.activeWorkout) || null;
+const workoutSets = (w) => state.sets.filter((s) => s.workout_id === w.id).sort(byTimeAsc);
+const itemSets = (w, item) => workoutSets(w).filter((s) => s.item === item.key);
+const focusedItem = (w) => (w ? w.items.find((i) => i.key === w.focus) || null : null);
+const itemDone = (w, item) => (item.sets ? itemSets(w, item).length >= item.sets : itemSets(w, item).length > 0);
 
-function autoSetNumber() {
-  const { exercise, variation } = state.current;
-  const nums = setsOn(today(), exercise, variation).map((s) => Number(s.set_number) || 0);
-  return nums.length ? Math.max(...nums) + 1 : 1;
-}
-
-function currentSetNumber() {
-  const c = state.current;
-  return c.setNumber ?? (c.exercise ? autoSetNumber() : 1);
-}
-
-// Most recent day before today on which this exercise + variation was done.
-function lastSession(exercise, variation) {
-  const t = today();
+// The most recent day this exercise + variation was done, outside the given workout.
+function lastSession(exercise, variation, excludeWorkoutId) {
+  const matches = state.sets.filter((s) => sameLift(s, exercise, variation) && s.workout_id !== excludeWorkoutId);
   let date = null;
-  for (const s of state.sets) {
-    if (sameLift(s, exercise, variation) && s.date < t && (!date || s.date > date)) date = s.date;
-  }
+  for (const s of matches) if (!date || s.date > date) date = s.date;
   if (!date) return null;
-  return { date, sets: setsOn(date, exercise, variation).sort((a, b) => a.set_number - b.set_number) };
+  return { date, sets: matches.filter((s) => s.date === date).sort(byTimeAsc) };
 }
 
 // Latest set of an exercise; pass a variation to narrow it down.
@@ -372,6 +476,14 @@ function recentExercises(limit = 6) {
     if (seen.length >= limit) break;
   }
   return seen;
+}
+
+function templateLastDone(name) {
+  let date = null;
+  for (const w of state.workouts) {
+    if (w.template === name && w.id !== state.current.activeWorkout && (!date || w.date > date)) date = w.date;
+  }
+  return date;
 }
 
 const cardioActivity = () => CARDIO_TYPES[state.current.cardioType] || state.current.activity;
@@ -395,8 +507,10 @@ function describeCardio(e) {
   return parts.join(' · ');
 }
 
+const setsText = (sets) => `${sets.map((s) => `${s.reps}×${fmtNum(s.weight_kg)}`).join(', ')} kg`;
+
 const pendingCount = () =>
-  state.sets.filter((s) => s.dirty).length + state.cardio.filter((e) => e.dirty).length + state.tombstones.length;
+  Object.keys(TABLES).reduce((n, kind) => n + entries(kind).filter((e) => e.dirty).length, 0) + state.tombstones.length;
 
 // ---------- rendering ----------
 
@@ -417,39 +531,226 @@ function chip(label, pressed, onClick, extraClass = '') {
   return b;
 }
 
-function renderForm() {
-  const weights = state.current.mode === 'weights';
-  setPressed(els.modeSeg, state.current.mode, 'data-mode');
-  els.weightsForm.hidden = !weights;
-  els.cardioForm.hidden = weights;
-  if (weights) renderWeightsForm();
-  else renderCardioForm();
+function currentView() {
+  if (state.current.view === 'workout' && !activeWorkout()) state.current.view = 'home';
+  return state.current.view;
 }
 
-function renderWeightsForm() {
-  const c = state.current;
-  els.exerciseBtn.textContent = c.exercise || 'Choose exercise';
-  els.exerciseBtn.classList.toggle('empty', !c.exercise);
-  setInput(els.reps, c.reps);
-  setInput(els.weight, fmtNum(c.weight));
-  setInput(els.setNum, currentSetNumber());
-  els.saveBtn.disabled = !c.exercise;
-  els.saveBtn.textContent = c.exercise ? `Log set ${currentSetNumber()}` : 'Choose an exercise first';
+function renderAll() {
+  const view = currentView();
+  els.homeView.hidden = view !== 'home';
+  els.workoutView.hidden = view !== 'workout';
+  els.cardioView.hidden = view !== 'cardio';
+  if (view === 'home') renderHome();
+  else if (view === 'workout') renderWorkout();
+  else renderCardioForm();
+  renderStatus();
+}
 
-  els.variationChips.replaceChildren();
-  els.variationChips.hidden = !c.exercise;
-  if (c.exercise) {
-    for (const v of exerciseDef(c.exercise)?.variations || []) {
-      els.variationChips.append(chip(v, v === c.variation, () => chooseVariation(v)));
-    }
-    els.variationChips.append(chip('+ Variation', null, addVariation, 'add'));
+function showView(view) {
+  state.current.view = view;
+  persistQuietly();
+  renderAll();
+  window.scrollTo({ top: 0 });
+}
+
+// ----- home -----
+
+function renderHome() {
+  const w = activeWorkout();
+  els.activeCard.hidden = !w;
+  els.startBtn.hidden = !!w;
+  if (w) {
+    const n = workoutSets(w).length;
+    els.activeName.textContent = w.name;
+    els.activeMeta.textContent = `${fmtDate(w.date)} · started ${fmtTime(w.started_at)} · ${n} ${n === 1 ? 'set' : 'sets'}`;
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const setsByWorkout = new Map();
+  for (const s of state.sets) {
+    const k = s.workout_id || `day:${s.date}`; // sets logged before workouts existed group by day
+    if (!setsByWorkout.has(k)) setsByWorkout.set(k, []);
+    setsByWorkout.get(k).push(s);
   }
 
-  const last = c.exercise && lastSession(c.exercise, c.variation);
-  els.lastSession.textContent = !c.exercise ? '' : last
-    ? `Last time (${fmtDate(last.date)}): ${last.sets.map((s) => `${s.reps}×${fmtNum(s.weight_kg)}`).join(', ')} kg`
-    : `First time logging ${c.variation ? 'this variation' : 'this one'}.`;
+  const items = [];
+  for (const w of state.workouts) {
+    const sets = setsByWorkout.get(w.id) || [];
+    if (w.id !== state.current.activeWorkout && sets.length) items.push({ type: 'workout', w, sets, time: w.started_at });
+  }
+  for (const [k, sets] of setsByWorkout) {
+    if (k.startsWith('day:')) items.push({ type: 'workout', w: null, sets, time: sets.sort(byTimeAsc)[0].timestamp });
+  }
+  for (const e of state.cardio) items.push({ type: 'cardio', e, time: e.timestamp });
+  items.sort((a, b) => String(b.time).localeCompare(String(a.time)));
+
+  els.history.replaceChildren();
+  if (!items.length) {
+    els.history.append(el('p', 'empty-note', 'Nothing logged yet. Start a workout or log some cardio.'));
+    return;
+  }
+  for (const item of items.slice(0, state.ui.historyLimit)) {
+    els.history.append(item.type === 'workout' ? historyWorkout(item) : historyCardio(item.e));
+  }
+  if (items.length > state.ui.historyLimit) {
+    els.history.append(button('secondary', 'Show more', () => { state.ui.historyLimit += 15; renderHistory(); }));
+  }
 }
+
+function historyWorkout({ w, sets }) {
+  sets.sort(byTimeAsc);
+  const id = w ? w.id : `day:${sets[0].date}`;
+  const date = w ? w.date : sets[0].date;
+  const open = state.ui.expanded.has(id);
+  const card = el('div', 'hist-card');
+
+  const head = button('hist-head', null, () => {
+    if (open) state.ui.expanded.delete(id); else state.ui.expanded.add(id);
+    renderHistory();
+  });
+  head.setAttribute('aria-expanded', String(open));
+  const info = el('div', 'hist-info');
+  info.append(el('strong', null, w ? w.name : 'Sets'),
+    el('small', null, [fmtDate(date), w && fmtTime(w.started_at), w && w.duration_min ? `${w.duration_min} min` : '']
+      .filter(Boolean).join(' · ')));
+  const volume = sum(sets, (s) => s.reps * s.weight_kg);
+  head.append(info, el('span', 'hist-stat', `${sets.length} ${sets.length === 1 ? 'set' : 'sets'} · ${fmtNum(volume)} kg`));
+  card.append(head);
+
+  if (open) {
+    const body = el('div', 'hist-body');
+    const byLift = new Map();
+    for (const s of sets) {
+      if (!byLift.has(liftName(s))) byLift.set(liftName(s), []);
+      byLift.get(liftName(s)).push(s);
+    }
+    for (const [name, list] of byLift) {
+      const line = el('div', 'hist-line');
+      line.append(el('strong', null, name), el('span', null, setsText(list)));
+      body.append(line);
+    }
+    const actions = el('div', 'hist-actions');
+    if (w) actions.append(button('link-btn', 'Edit', () => editWorkout(w.id)));
+    actions.append(button('link-btn danger', 'Delete', () => deleteWorkout(w, sets)));
+    body.append(actions);
+    card.append(body);
+  }
+  return card;
+}
+
+function historyCardio(e) {
+  const card = el('div', 'hist-card');
+  const row = el('div', 'hist-head');
+  const info = el('div', 'hist-info');
+  info.append(el('strong', null, e.activity), el('small', null, `${fmtDate(e.date)} · ${fmtTime(e.timestamp)}`),
+    el('span', 'hist-detail', describeCardio(e)));
+  if (e.notes) info.append(el('small', null, e.notes));
+  const del = button('del', '×', () => deleteEntry('cardio', e.id, { confirm: true }));
+  del.setAttribute('aria-label', `Delete ${e.activity}`);
+  row.append(info, del);
+  card.append(row);
+  return card;
+}
+
+// ----- workout -----
+
+function renderWorkout() {
+  const w = activeWorkout();
+  if (!w) return;
+  els.wName.textContent = w.name;
+  renderWorkoutMeta();
+
+  els.exerciseList.replaceChildren();
+  if (!w.items.length) els.exerciseList.append(el('p', 'empty-note', 'No exercises yet. Add one below.'));
+  w.items.forEach((item, i) => {
+    const sets = itemSets(w, item);
+    const current = item.key === w.focus;
+    const card = el('div', `ex-card${current ? ' current' : ''}${itemDone(w, item) ? ' done' : ''}`);
+    card.dataset.key = item.key;
+
+    const head = button('ex-head', null, () => focusItem(item.key));
+    head.setAttribute('aria-expanded', String(current));
+    const info = el('div', 'ex-info');
+    const target = [item.variation, item.sets && `${item.sets} × ${item.reps}`, item.note].filter(Boolean).join(' · ');
+    info.append(el('strong', null, item.exercise));
+    if (target) info.append(el('small', null, target));
+    head.append(el('span', 'ex-num', itemDone(w, item) ? '✓' : String(i + 1)), info,
+      el('span', 'ex-progress', item.sets ? `${sets.length}/${item.sets}` : `${sets.length}`));
+    card.append(head);
+
+    if (current) card.append(els.setLogger);
+    else if (sets.length) card.append(el('p', 'ex-summary', setsText(sets)));
+    els.exerciseList.append(card);
+  });
+  if (!focusedItem(w)) els.loggerHome.append(els.setLogger);
+  renderLogger();
+}
+
+function renderWorkoutMeta() {
+  const w = activeWorkout();
+  if (!w) return;
+  const sets = workoutSets(w);
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(w.started_at)) / 60000));
+  const live = w.date === today() && !w.ended_at;
+  els.wMeta.textContent = [fmtDate(w.date), `started ${fmtTime(w.started_at)}`, live ? `${minutes} min` : '',
+    `${sets.length} ${sets.length === 1 ? 'set' : 'sets'}`].filter(Boolean).join(' · ');
+}
+
+// The set logger is one fixed block that moves into whichever exercise card is open,
+// so its inputs keep focus and values while the rest of the screen re-renders.
+function renderLogger() {
+  const w = activeWorkout();
+  const item = focusedItem(w);
+  if (!item) return;
+  const sets = itemSets(w, item);
+
+  els.variationChips.replaceChildren();
+  for (const v of exerciseDef(item.exercise)?.variations || []) {
+    els.variationChips.append(chip(v, v === item.variation, () => chooseVariation(v)));
+  }
+  els.variationChips.append(chip('+ Variation', null, addVariation, 'add'));
+
+  const last = lastSession(item.exercise, item.variation, w.id);
+  els.lastSession.textContent = last
+    ? `Last time (${fmtDate(last.date)}): ${setsText(last.sets)}`
+    : `First time logging ${item.variation ? `${item.exercise} · ${item.variation}` : item.exercise}.`;
+
+  els.loggedSets.replaceChildren();
+  for (const s of sets) els.loggedSets.append(setRow(s, item));
+
+  setInput(els.reps, item.draft.reps);
+  setInput(els.weight, fmtNum(item.draft.weight));
+  els.logSetBtn.textContent = `Log set ${nextSetNumber(sets)}`;
+  els.swapBtn.hidden = sets.length > 0;
+  els.removeItemBtn.hidden = sets.length > 0;
+}
+
+const nextSetNumber = (sets) => (sets.length ? Math.max(...sets.map((s) => Number(s.set_number) || 0)) + 1 : 1);
+
+function pendingDot(e) {
+  const dot = el('span', e.dirty ? 'dot pending' : 'dot');
+  if (e.dirty) dot.title = 'Waiting to sync';
+  return dot;
+}
+
+function setRow(s, item) {
+  const row = el('div', 'set-row');
+  const meta = [
+    (s.variation || '') !== (item.variation || '') ? s.variation : '',
+    s.rpe !== '' && s.rpe != null ? `RPE ${s.rpe}` : '',
+    s.notes,
+  ].filter(Boolean).join(' · ');
+  const del = button('del', '×', () => deleteEntry('strength', s.id, { confirm: true }));
+  del.setAttribute('aria-label', `Delete set ${s.set_number}`);
+  row.append(el('span', 'set-n', `#${s.set_number}`), el('span', 'set-main', `${s.reps} × ${fmtNum(s.weight_kg)} kg`),
+    el('span', 'set-meta', meta), pendingDot(s), del);
+  return row;
+}
+
+// ----- cardio -----
 
 function renderCardioForm() {
   const c = state.current;
@@ -476,78 +777,9 @@ function renderCardioForm() {
     ? `Last time (${fmtDate(last.date)}): ${describeCardio(last)}`
     : `First time logging ${activity.toLowerCase()}.`;
 
-  els.saveBtn.disabled = !activity;
-  els.saveBtn.textContent = { running: 'Log run', stairmaster: 'Log stairmaster' }[c.cardioType] ||
+  els.cardioSaveBtn.disabled = !activity;
+  els.cardioSaveBtn.textContent = { running: 'Log run', stairmaster: 'Log stairmaster' }[c.cardioType] ||
     (activity ? `Log ${activity.toLowerCase()}` : 'Pick an activity');
-}
-
-function renderToday() {
-  const t = today();
-  const items = [
-    ...setsOn(t).map((e) => ({ kind: 'strength', e, group: `s|${liftName(e)}` })),
-    ...state.cardio.filter((e) => e.date === t).map((e) => ({ kind: 'cardio', e, group: `c|${e.activity}` })),
-  ].sort((a, b) => byTimeDesc(a.e, b.e));
-
-  els.today.replaceChildren();
-  els.undoBtn.hidden = !items.length;
-  if (!items.length) {
-    els.today.append(el('p', 'empty-note', 'Nothing logged today yet.'));
-    return;
-  }
-
-  // Groups keep the order of their newest entry, so what you're doing now stays on top.
-  const groups = new Map();
-  for (const item of items) {
-    if (!groups.has(item.group)) groups.set(item.group, []);
-    groups.get(item.group).push(item);
-  }
-
-  for (const list of groups.values()) {
-    const first = list[0];
-    const group = el('div', 'group');
-    let title;
-    if (first.kind === 'strength') {
-      const volume = list.reduce((sum, { e }) => sum + e.reps * e.weight_kg, 0);
-      title = button('group-title', liftName(first.e), () => chooseExercise(first.e.exercise, first.e.variation || ''));
-      title.append(el('small', null, `${list.length} ${list.length === 1 ? 'set' : 'sets'} · ${fmtNum(volume)} kg vol`));
-    } else {
-      const minutes = list.reduce((sum, { e }) => sum + Number(e.duration_min), 0);
-      title = button('group-title', first.e.activity, () => selectCardioActivity(first.e.activity));
-      title.append(el('small', null, `${list.length > 1 ? `${list.length} sessions · ` : ''}${fmtDurationShort(minutes)}`));
-    }
-    group.append(title);
-    for (const item of list) group.append(item.kind === 'strength' ? setRow(item.e) : cardioRow(item.e));
-    els.today.append(group);
-  }
-}
-
-function pendingDot(e) {
-  const dot = el('span', e.dirty ? 'dot pending' : 'dot');
-  if (e.dirty) dot.title = 'Waiting to sync';
-  return dot;
-}
-
-function deleteButton(kind, e, label) {
-  const del = button('del', '×', () => deleteEntry(kind, e.id, { confirm: true }));
-  del.setAttribute('aria-label', label);
-  return del;
-}
-
-function setRow(s) {
-  const row = el('div', 'set-row');
-  const meta = [s.rpe !== '' && s.rpe != null ? `RPE ${s.rpe}` : '', s.notes].filter(Boolean).join(' · ');
-  row.append(el('span', 'set-n', `#${s.set_number}`), el('span', 'set-main', `${s.reps} × ${fmtNum(s.weight_kg)} kg`),
-    el('span', 'set-meta', meta), pendingDot(s), deleteButton('strength', s, `Delete set ${s.set_number}`));
-  return row;
-}
-
-function cardioRow(e) {
-  const row = el('div', 'set-row cardio-row');
-  const text = el('div', 'cardio-text');
-  text.append(el('span', 'set-main', describeCardio(e)));
-  if (e.notes) text.append(el('span', 'set-meta', e.notes));
-  row.append(text, pendingDot(e), deleteButton('cardio', e, `Delete ${e.activity}`));
-  return row;
 }
 
 function renderStatus() {
@@ -562,12 +794,6 @@ function renderStatus() {
   else { text = '✓ Synced'; cls = 'ok'; }
   els.syncBtn.textContent = text;
   els.syncBtn.className = `pill ${cls}`;
-}
-
-function renderAll() {
-  renderForm();
-  renderToday();
-  renderStatus();
 }
 
 let toastTimer;
@@ -586,69 +812,267 @@ function toast(msg, { error = false, action = null } = {}) {
 
 function hideToast() { els.toast.hidden = true; }
 
-// ---------- actions ----------
+// ---------- workout actions ----------
+
+// Starting reps/weight: what you did last time on this exercise + variation, else the bottom of the target range.
+function draftFor(item) {
+  const last = latestSet(item.exercise, item.variation);
+  return {
+    reps: last ? Number(last.reps) : parseInt(item.reps, 10) || 8,
+    weight: last ? Number(last.weight_kg) : 0,
+  };
+}
+
+// Use the requested variation if the exercise has it, else the one used last time, else the first listed.
+function pickVariation(exercise, variation) {
+  const vars = exerciseDef(exercise)?.variations || [];
+  if (variation && vars.includes(variation)) return variation;
+  const last = latestSet(exercise);
+  return last && vars.includes(last.variation) ? last.variation : (vars[0] || '');
+}
+
+function makeItem(exercise, variation = null, sets = null, reps = '', note = '') {
+  const item = { key: uuid().slice(0, 8), exercise, variation: pickVariation(exercise, variation), sets, reps, note };
+  item.draft = draftFor(item);
+  return item;
+}
+
+function startWorkout(template) {
+  if (activeWorkout()) return toast('Finish your current workout first', { error: true });
+  const now = new Date();
+  const w = {
+    id: uuid(),
+    date: localDate(now),
+    name: template ? template.name : 'Workout',
+    template: template ? template.name : '',
+    started_at: localIso(now),
+    ended_at: '',
+    duration_min: '',
+    items: template ? template.items.map((i) => makeItem(i.exercise, i.variation, i.sets, i.reps, i.note)) : [],
+    focus: null,
+    dirty: true,
+  };
+  w.focus = w.items[0]?.key ?? null;
+  state.workouts.push(w);
+  state.current.activeWorkout = w.id;
+  if (els.templates.open) els.templates.close();
+  showView('workout');
+  if (!template) openPicker('add'); // blank workout: go straight to choosing the first exercise
+}
+
+function focusItem(key) {
+  const w = activeWorkout();
+  readLogger();
+  w.focus = w.focus === key ? null : key; // tapping the open exercise collapses it
+  persistQuietly();
+  renderWorkout();
+  scrollToItem(w.focus);
+}
+
+function scrollToItem(key) {
+  if (!key) return;
+  const card = els.exerciseList.querySelector(`[data-key="${key}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function chooseVariation(variation) {
+  const item = focusedItem(activeWorkout());
+  readLogger();
+  item.variation = variation;
+  item.draft = draftFor(item);
+  persistQuietly();
+  renderWorkout();
+}
+
+function addVariation() {
+  const item = focusedItem(activeWorkout());
+  const name = (prompt(`New variation for ${item.exercise}`, '') || '').trim().replace(/\s+/g, ' ');
+  if (!name) return;
+  let def = exerciseDef(item.exercise);
+  if (!def) {
+    def = { name: item.exercise, category: 'Custom', variations: [] };
+    state.exercises.push(def);
+  }
+  const existing = def.variations.find((v) => v.toLowerCase() === name.toLowerCase());
+  if (!existing) def.variations.push(name);
+  chooseVariation(existing || name);
+}
+
+function addItem(exercise) {
+  const w = activeWorkout();
+  readLogger();
+  const item = makeItem(exercise);
+  w.items.push(item);
+  w.focus = item.key;
+  persistQuietly();
+  renderWorkout();
+  scrollToItem(item.key);
+}
+
+function swapItem(key, exercise) {
+  const w = activeWorkout();
+  const item = w.items.find((i) => i.key === key);
+  const fresh = makeItem(exercise, null, item.sets, item.reps, item.note);
+  Object.assign(item, { exercise, variation: fresh.variation, draft: fresh.draft });
+  persistQuietly();
+  renderWorkout();
+}
+
+function removeItem() {
+  const w = activeWorkout();
+  const item = focusedItem(w);
+  const index = w.items.indexOf(item);
+  w.items.splice(index, 1);
+  w.focus = (w.items[index] || w.items[index - 1])?.key ?? null;
+  persistQuietly();
+  renderWorkout();
+}
+
+function renameWorkout() {
+  const w = activeWorkout();
+  const name = (prompt('Workout name', w.name) || '').trim().replace(/\s+/g, ' ');
+  if (!name || name === w.name) return;
+  w.name = name;
+  w.dirty = true;
+  for (const s of workoutSets(w)) { s.workout = name; s.dirty = true; }
+  persistQuietly();
+  renderAll();
+  sync();
+}
+
+// Copy the typed reps/weight into the open exercise's draft.
+function readLogger() {
+  const item = focusedItem(activeWorkout());
+  if (!item) return;
+  const reps = parseNum(els.reps.value);
+  const weight = parseNum(els.weight.value);
+  if (reps >= 0) item.draft.reps = Math.round(reps);
+  if (weight >= 0) item.draft.weight = round(weight);
+  persistQuietly();
+}
+
+// Next exercise that still needs sets: after this one first, then any skipped earlier.
+function nextUnfinished(w, item) {
+  const i = w.items.indexOf(item);
+  return [...w.items.slice(i + 1), ...w.items.slice(0, i)].find((x) => !itemDone(w, x)) || null;
+}
 
 let lastSaveAt = 0;
 
-function logEntry() {
-  if (Date.now() - lastSaveAt < 400) return; // ignore accidental double taps
-  readForm();
-  if (state.current.mode === 'weights') logSet();
-  else logCardio();
-}
-
 function logSet() {
-  const c = state.current;
-  if (!c.exercise) return;
-  const reps = Math.round(Number(c.reps));
-  const weight = round(Number(c.weight));
+  if (Date.now() - lastSaveAt < 400) return; // ignore accidental double taps
+  const w = activeWorkout();
+  const item = focusedItem(w);
+  if (!item) return;
+  readLogger();
+  const reps = Math.round(Number(item.draft.reps));
+  const weight = round(Number(item.draft.weight));
   if (!Number.isFinite(reps) || reps < 0) return toast('Reps must be a number', { error: true });
   if (!Number.isFinite(weight) || weight < 0) return toast('Weight must be a number', { error: true });
   const rpe = parseNum(els.rpe.value);
+  const done = itemSets(w, item);
 
   const set = {
-    ...stamp(),
-    exercise: c.exercise,
-    variation: c.variation || '',
-    set_number: currentSetNumber(),
+    id: uuid(),
+    timestamp: localIso(),
+    date: w.date, // a set belongs to its workout's day, even after midnight
+    workout_id: w.id,
+    workout: w.name,
+    item: item.key, // local only: which card in the workout it belongs to
+    exercise: item.exercise,
+    variation: item.variation || '',
+    set_number: nextSetNumber(done),
     reps,
     weight_kg: weight,
     rpe: Number.isFinite(rpe) ? rpe : '',
     notes: els.notes.value.trim(),
     dirty: true,
   };
-  c.setNumber = null;
-  if (addEntry('strength', set, `Set ${set.set_number} logged: ${set.reps} × ${fmtNum(set.weight_kg)} kg`)) {
-    els.rpe.value = '';
-    els.notes.value = '';
+
+  // Hit the target number of sets? Open the next exercise.
+  let message = `Set ${set.set_number} logged: ${reps} × ${fmtNum(weight)} kg`;
+  const previousFocus = w.focus;
+  if (item.sets && done.length + 1 >= item.sets) {
+    const next = nextUnfinished(w, item);
+    w.focus = next ? next.key : null;
+    message += next ? ` · next: ${next.exercise}` : ' · all exercises done!';
   }
+
+  const ok = addEntry('strength', set, message, () => { w.focus = previousFocus; persistQuietly(); renderAll(); });
+  if (!ok) { w.focus = previousFocus; return; }
+  els.rpe.value = '';
+  els.notes.value = '';
+  if (w.focus !== previousFocus) scrollToItem(w.focus);
 }
 
-function logCardio() {
-  const c = state.current;
-  const activity = cardioActivity();
-  if (!activity) return;
-  if (!(c.duration > 0)) return toast('Enter a duration', { error: true });
-
-  const entry = {
-    ...stamp(),
-    activity,
-    duration_min: round(c.duration),
-    distance_km: c.cardioType === 'running' ? round(c.distance) : '',
-    floors: c.cardioType === 'stairmaster' ? Math.round(c.floors) : '',
-    level: c.cardioType === 'stairmaster' ? round(c.level, 1) : '',
-    notes: els.cNotes.value.trim(),
-    dirty: true,
-  };
-  if (addEntry('cardio', entry, `${activity} logged: ${describeCardio(entry)}`)) els.cNotes.value = '';
+function finishWorkout() {
+  const w = activeWorkout();
+  if (!w) return;
+  readLogger();
+  const sets = workoutSets(w);
+  if (!sets.length) {
+    if (!confirm('No sets logged. Discard this workout?')) return;
+    removeWorkout(w);
+  } else {
+    // If Finish comes long after the last set (you forgot to tap it), end the workout at the last set.
+    const now = new Date();
+    const lastAt = new Date(sets[sets.length - 1].timestamp);
+    const end = now - lastAt > 30 * 60000 ? lastAt : now;
+    w.ended_at = localIso(end);
+    w.duration_min = Math.max(1, Math.round((end - new Date(w.started_at)) / 60000));
+    w.dirty = true;
+    const volume = sum(sets, (s) => s.reps * s.weight_kg);
+    toast(`${w.name} done: ${sets.length} sets · ${fmtNum(volume)} kg · ${w.duration_min} min`);
+  }
+  state.current.activeWorkout = null;
+  try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
+  showView('home');
+  sync();
 }
 
-function stamp() {
-  const now = new Date();
-  return { id: uuid(), timestamp: localIso(now), date: localDate(now) };
+function removeWorkout(w) {
+  state.workouts = state.workouts.filter((x) => x !== w);
+  state.tombstones.push({ id: w.id, date: w.date, kind: 'workouts' });
+  if (state.current.activeWorkout === w.id) state.current.activeWorkout = null;
 }
 
-function addEntry(kind, entry, message) {
+// Rebuild exercise cards for a workout restored from GitHub (CSV rows don't carry the card layout).
+function itemsFromSets(w) {
+  const items = new Map();
+  for (const s of workoutSets(w)) {
+    const k = `${s.exercise}|${s.variation || ''}`;
+    if (!items.has(k)) items.set(k, { ...makeItem(s.exercise, s.variation), variation: s.variation || '' });
+    s.item = items.get(k).key;
+  }
+  return [...items.values()];
+}
+
+function editWorkout(id) {
+  if (activeWorkout()) return toast('Finish your current workout first', { error: true });
+  const w = state.workouts.find((x) => x.id === id);
+  const sets = workoutSets(w);
+  if (!w.items || !w.items.length || sets.some((s) => !w.items.some((i) => i.key === s.item))) w.items = itemsFromSets(w);
+  w.focus = null;
+  state.current.activeWorkout = w.id;
+  showView('workout');
+}
+
+function deleteWorkout(w, sets) {
+  const label = w ? `${w.name} on ${fmtDate(w.date)}` : `sets from ${fmtDate(sets[0].date)}`;
+  if (!confirm(`Delete ${label} (${sets.length} sets)? This removes it from GitHub too.`)) return;
+  const ids = new Set(sets.map((s) => s.id));
+  state.sets = state.sets.filter((s) => !ids.has(s.id));
+  sets.forEach((s) => state.tombstones.push({ id: s.id, date: s.date, kind: 'strength' }));
+  if (w) removeWorkout(w);
+  try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
+  renderAll();
+  toast('Workout deleted');
+  sync();
+}
+
+// ---------- shared entry actions ----------
+
+function addEntry(kind, entry, message, onUndo) {
   entries(kind).push(entry);
   try {
     persist();
@@ -659,7 +1083,7 @@ function addEntry(kind, entry, message) {
   }
   lastSaveAt = Date.now();
   renderAll();
-  toast(message, { action: { label: 'Undo', run: () => deleteEntry(kind, entry.id) } });
+  toast(message, { action: { label: 'Undo', run: () => { deleteEntry(kind, entry.id); if (onUndo) onUndo(); } } });
   sync();
   return true;
 }
@@ -679,25 +1103,34 @@ function deleteEntry(kind, id, { confirm: ask = false } = {}) {
   sync();
 }
 
-function undoLast() {
-  const t = today();
-  const latest = [
-    ...setsOn(t).map((e) => ({ kind: 'strength', e })),
-    ...state.cardio.filter((e) => e.date === t).map((e) => ({ kind: 'cardio', e })),
-  ].sort((a, b) => byTimeDesc(a.e, b.e))[0];
-  if (latest) deleteEntry(latest.kind, latest.e.id, { confirm: true });
+function step(field, dir) {
+  const c = state.current;
+  if (field === 'reps' || field === 'weight') {
+    readLogger();
+    const item = focusedItem(activeWorkout());
+    if (!item) return;
+    const { repStep, weightStep } = state.settings;
+    if (field === 'reps') item.draft.reps = Math.max(0, Math.round(item.draft.reps + dir * repStep));
+    else item.draft.weight = Math.max(0, round(item.draft.weight + dir * weightStep));
+    persistQuietly();
+    renderLogger();
+    return;
+  }
+  readCardio();
+  switch (field) {
+    case 'duration': c.duration = Math.max(0, round(c.duration + dir, 4)); break;
+    case 'distance': c.distance = Math.max(0, round(c.distance + dir * 0.5)); break;
+    case 'floors': c.floors = Math.max(0, Math.round(c.floors + dir * 5)); break;
+    case 'level': c.level = Math.max(0, round(c.level + dir, 1)); break;
+  }
+  persistQuietly();
+  renderCardioForm();
 }
 
-// Copy what's typed in the inputs into state.current.
-function readForm() {
-  const c = state.current;
-  const reps = parseNum(els.reps.value);
-  const weight = parseNum(els.weight.value);
-  const setNum = parseNum(els.setNum.value);
-  if (Number.isFinite(reps)) c.reps = Math.max(0, Math.round(reps));
-  if (Number.isFinite(weight)) c.weight = Math.max(0, round(weight));
-  if (Number.isFinite(setNum) && Math.round(setNum) !== currentSetNumber()) c.setNumber = Math.max(1, Math.round(setNum));
+// ---------- cardio actions ----------
 
+function readCardio() {
+  const c = state.current;
   const duration = parseDuration(els.cDuration.value);
   const distance = parseNum(els.cDistance.value);
   const floors = parseNum(els.cFloors.value);
@@ -706,92 +1139,37 @@ function readForm() {
   if (distance >= 0) c.distance = round(distance);
   if (floors >= 0) c.floors = Math.round(floors);
   if (level >= 0) c.level = round(level, 1);
-  saveCurrent();
+  persistQuietly();
 }
 
-function step(field, dir) {
-  readForm();
+function logCardio() {
+  if (Date.now() - lastSaveAt < 400) return;
+  readCardio();
   const c = state.current;
-  const { repStep, weightStep } = state.settings;
-  switch (field) {
-    case 'reps': c.reps = Math.max(0, Math.round(c.reps + dir * repStep)); break;
-    case 'weight': c.weight = Math.max(0, round(c.weight + dir * weightStep)); break;
-    case 'set': c.setNumber = Math.max(1, currentSetNumber() + dir); break;
-    case 'duration': c.duration = Math.max(0, round(c.duration + dir, 4)); break;
-    case 'distance': c.distance = Math.max(0, round(c.distance + dir * 0.5)); break;
-    case 'floors': c.floors = Math.max(0, Math.round(c.floors + dir * 5)); break;
-    case 'level': c.level = Math.max(0, round(c.level + dir, 1)); break;
+  const activity = cardioActivity();
+  if (!activity) return;
+  if (!(c.duration > 0)) return toast('Enter a duration', { error: true });
+
+  const now = new Date();
+  const entry = {
+    id: uuid(),
+    timestamp: localIso(now),
+    date: localDate(now),
+    activity,
+    duration_min: round(c.duration),
+    distance_km: c.cardioType === 'running' ? round(c.distance) : '',
+    floors: c.cardioType === 'stairmaster' ? Math.round(c.floors) : '',
+    level: c.cardioType === 'stairmaster' ? round(c.level, 1) : '',
+    notes: els.cNotes.value.trim(),
+    dirty: true,
+  };
+  state.current.view = 'home'; // cardio is a one-off: back to home, where it shows in history
+  if (addEntry('cardio', entry, `${activity} logged: ${describeCardio(entry)}`)) {
+    els.cNotes.value = '';
+    window.scrollTo({ top: 0 });
+  } else {
+    state.current.view = 'cardio';
   }
-  saveCurrent();
-  renderForm();
-}
-
-function setMode(mode) {
-  readForm();
-  state.current.mode = mode;
-  saveCurrent();
-  renderForm();
-}
-
-// Start from whatever you did last time on this exercise + variation.
-function prefillLift() {
-  const c = state.current;
-  const last = latestSet(c.exercise, c.variation);
-  if (last) { c.reps = Number(last.reps); c.weight = Number(last.weight_kg); }
-  c.setNumber = null;
-}
-
-function chooseExercise(name, variation) {
-  const c = state.current;
-  c.mode = 'weights';
-  if (c.exercise !== name || (variation !== undefined && variation !== c.variation)) {
-    const vars = exerciseDef(name)?.variations || [];
-    if (variation === undefined) {
-      // Default to the variation you used last time, else the first one listed.
-      const last = latestSet(name);
-      variation = last && vars.includes(last.variation) ? last.variation : (vars[0] || '');
-    }
-    c.exercise = name;
-    c.variation = variation;
-    prefillLift();
-  }
-  saveCurrent();
-  if (els.picker.open) els.picker.close();
-  renderForm();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function chooseVariation(variation) {
-  readForm();
-  state.current.variation = variation;
-  prefillLift();
-  saveCurrent();
-  renderForm();
-}
-
-function addVariation() {
-  const c = state.current;
-  const name = (prompt(`New variation for ${c.exercise}`, '') || '').trim().replace(/\s+/g, ' ');
-  if (!name) return;
-  let def = exerciseDef(c.exercise);
-  if (!def) {
-    def = { name: c.exercise, category: 'Custom', variations: [] };
-    state.exercises.push(def);
-  }
-  const existing = def.variations.find((v) => v.toLowerCase() === name.toLowerCase());
-  if (!existing) def.variations.push(name);
-  try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
-  chooseVariation(existing || name);
-}
-
-function addExercise(name) {
-  const clean = name.trim().replace(/\s+/g, ' ');
-  if (!clean) return null;
-  const existing = state.exercises.find((e) => e.name.toLowerCase() === clean.toLowerCase());
-  if (existing) return existing.name;
-  state.exercises.push({ name: clean, category: 'Custom', variations: [] });
-  try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
-  return clean;
 }
 
 function prefillCardio() {
@@ -805,44 +1183,64 @@ function prefillCardio() {
 }
 
 function chooseCardioType(type) {
-  readForm();
+  readCardio();
   state.current.cardioType = type;
   prefillCardio();
-  saveCurrent();
-  renderForm();
+  persistQuietly();
+  renderCardioForm();
 }
 
 function chooseActivity(activity) {
-  readForm();
+  readCardio();
   state.current.activity = activity;
   prefillCardio();
-  saveCurrent();
-  renderForm();
-}
-
-function selectCardioActivity(activity) {
-  const type = Object.keys(CARDIO_TYPES).find((k) => CARDIO_TYPES[k] === activity);
-  state.current.mode = 'cardio';
-  if (type) chooseCardioType(type);
-  else { state.current.cardioType = 'other'; chooseActivity(activity); }
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  persistQuietly();
+  renderCardioForm();
 }
 
 function addActivity() {
   const name = (prompt('New activity (e.g. Volleyball)', '') || '').trim().replace(/\s+/g, ' ');
   if (!name) return;
   const existing = state.activities.find((a) => a.toLowerCase() === name.toLowerCase());
-  if (!existing) {
-    state.activities.push(name);
-    try { persist(); } catch (e) { toast(`Could not save: ${e.message}`, { error: true }); }
-  }
+  if (!existing) state.activities.push(name);
   chooseActivity(existing || name);
+}
+
+// ---------- template sheet ----------
+
+const itemLabel = (i) => (i.variation && i.variation !== 'Bodyweight' ? `${i.variation} ${i.exercise}` : i.exercise);
+
+function renderTemplates() {
+  const list = els.templateList;
+  list.replaceChildren();
+  const blank = button('tpl-card blank', null, () => startWorkout(null));
+  blank.append(el('strong', null, 'Blank workout'), el('small', null, 'No template: add exercises as you go'));
+  list.append(blank);
+
+  for (const group of [...new Set(TEMPLATES.map((t) => t.group))]) {
+    list.append(el('h4', null, group));
+    for (const t of TEMPLATES.filter((x) => x.group === group)) {
+      const card = button('tpl-card', null, () => startWorkout(t));
+      const top = el('div', 'tpl-top');
+      const last = templateLastDone(t.name);
+      top.append(el('strong', null, t.name), el('span', 'tpl-last', last ? `Last: ${fmtDate(last)}` : 'Not done yet'));
+      card.append(top, el('span', null, t.focus), el('small', null, t.items.map(itemLabel).join(' · ')));
+      list.append(card);
+    }
+  }
+}
+
+function openTemplates() {
+  if (activeWorkout()) return showView('workout');
+  renderTemplates();
+  els.templates.showModal();
+  els.templateList.scrollTop = 0;
 }
 
 // ---------- exercise picker ----------
 
 function pickButton(def) {
-  const b = button(def.name === state.current.exercise ? 'pick current' : 'pick', def.name, () => chooseExercise(def.name));
+  const b = button('pick', def.name, () => pickExercise(def.name));
   if (def.variations.length) b.append(el('small', null, def.variations.join(' · ')));
   return b;
 }
@@ -856,7 +1254,7 @@ function renderPicker() {
   if (q) {
     if (!state.exercises.some((e) => e.name.toLowerCase() === q)) {
       const name = els.pickerSearch.value.trim();
-      list.append(button('pick add', `+ Add “${name}”`, () => chooseExercise(addExercise(name))));
+      list.append(button('pick add', `+ Add “${name}”`, () => pickExercise(addExercise(name))));
     }
     sorted.filter((e) => e.name.toLowerCase().includes(q)).forEach((e) => list.append(pickButton(e)));
     return;
@@ -868,18 +1266,27 @@ function renderPicker() {
     recent.forEach((name) => list.append(pickButton(exerciseDef(name))));
   }
   for (const category of CATEGORIES) {
-    const inCategory = sorted.filter((e) => (CATEGORIES.includes(e.category) ? e.category : 'Custom') === category);
+    const inCategory = sorted.filter((e) => categoryOf(e) === category);
     if (!inCategory.length) continue;
     list.append(el('h4', null, category));
     inCategory.forEach((e) => list.append(pickButton(e)));
   }
 }
 
-function openPicker() {
+function openPicker(mode, key = null) {
+  state.picker = { mode, key };
   els.pickerSearch.value = '';
+  els.pickerSearch.placeholder = mode === 'swap' ? 'Swap to…' : 'Search or add…';
   renderPicker();
   els.picker.showModal();
   els.pickerList.scrollTop = 0;
+}
+
+function pickExercise(name) {
+  if (!name) return;
+  els.picker.close();
+  if (state.picker.mode === 'swap') swapItem(state.picker.key, name);
+  else addItem(name);
 }
 
 function onPickerEnter() {
@@ -888,7 +1295,17 @@ function onPickerEnter() {
   const ql = q.toLowerCase();
   const matches = state.exercises.filter((e) => e.name.toLowerCase().includes(ql));
   const exact = state.exercises.find((e) => e.name.toLowerCase() === ql);
-  chooseExercise(exact ? exact.name : matches.length === 1 ? matches[0].name : addExercise(q));
+  pickExercise(exact ? exact.name : matches.length === 1 ? matches[0].name : addExercise(q));
+}
+
+function addExercise(name) {
+  const clean = name.trim().replace(/\s+/g, ' ');
+  if (!clean) return null;
+  const existing = state.exercises.find((e) => e.name.toLowerCase() === clean.toLowerCase());
+  if (existing) return existing.name;
+  state.exercises.push({ name: clean, category: 'Custom', variations: [] });
+  persistQuietly();
+  return clean;
 }
 
 // ---------- GitHub sync ----------
@@ -935,7 +1352,7 @@ async function getFile(path) {
   return { sha: json.sha, text: b64decode(json.content || '') };
 }
 
-// Merge local changes into one monthly file (e.g. cardio/2026-10.csv): upsert by id, drop deleted ids.
+// Merge local changes into one monthly file (e.g. sets/2026-10.csv): upsert by id, drop deleted ids.
 async function syncFile(kind, month, upserts, deleteIds) {
   const { dir, columns } = TABLES[kind];
   const path = `${dir}/${month}.csv`;
@@ -944,7 +1361,8 @@ async function syncFile(kind, month, upserts, deleteIds) {
     const byId = new Map(parseCsv(text).map((r) => [r.id, r]));
     upserts.forEach((e) => byId.set(e.id, toRow(columns, e)));
     deleteIds.forEach((id) => byId.delete(id));
-    const csv = toCsv(columns, [...byId.values()].sort(byTimeAsc));
+    if (!sha && !byId.size) return; // nothing to write, and no file to create
+    const csv = toCsv(columns, [...byId.values()].sort((a, b) => rowTime(a).localeCompare(rowTime(b))));
     if (csv === text) return; // already up to date
 
     const counts = [upserts.length && `+${upserts.length}`, deleteIds.length && `-${deleteIds.length}`].filter(Boolean);
@@ -981,11 +1399,14 @@ async function sync() {
 
   try {
     for (const { kind, month, up, del } of buckets.values()) {
+      // Snapshot what's being sent, so an edit made mid-sync stays dirty for the next round.
+      const sent = up.map((e) => [e, JSON.stringify(toRow(TABLES[kind].columns, e))]);
       await syncFile(kind, month, up, del);
       // Mark each file done as it lands, so a later failure doesn't redo it.
-      const upIds = new Set(up.map((e) => e.id));
+      for (const [e, snapshot] of sent) {
+        if (JSON.stringify(toRow(TABLES[kind].columns, e)) === snapshot) e.dirty = false;
+      }
       const delIds = new Set(del);
-      entries(kind).forEach((e) => { if (upIds.has(e.id)) e.dirty = false; });
       state.tombstones = state.tombstones.filter((t) => !delIds.has(t.id));
       persist();
     }
@@ -996,7 +1417,9 @@ async function sync() {
     else state.lastError = e.message || String(e);
   } finally {
     state.syncing = false;
-    renderToday();
+    // Only refresh the parts showing sync state; a full re-render could pull focus from an input.
+    if (currentView() === 'workout') renderLogger();
+    else if (currentView() === 'home') renderHome();
     renderStatus();
     if (state.syncQueued) { state.syncQueued = false; sync(); }
   }
@@ -1036,7 +1459,7 @@ function rememberNames(kind, e) {
     }
     return;
   }
-  if (!e.exercise) return;
+  if (kind !== 'strength' || !e.exercise) return;
   let def = exerciseDef(e.exercise);
   if (!def) {
     def = { name: e.exercise, category: 'Custom', variations: [] };
@@ -1059,7 +1482,7 @@ async function exportCsv() {
   const files = Object.entries(TABLES)
     .filter(([kind]) => entries(kind).length)
     .map(([kind, { dir, columns }]) => new File(
-      [toCsv(columns, [...entries(kind)].sort(byTimeAsc).map((e) => toRow(columns, e)))],
+      [toCsv(columns, [...entries(kind)].sort((a, b) => rowTime(a).localeCompare(rowTime(b))).map((e) => toRow(columns, e)))],
       `${dir}-${stampDate}.csv`,
       { type: 'text/csv' },
     ));
@@ -1090,17 +1513,15 @@ function renderSettings() {
   els.sWeightStep.value = s.weightStep;
   renderExerciseList();
   renderActivityList();
-  const days = new Set([...state.sets, ...state.cardio].map((x) => x.date)).size;
-  els.sStats.textContent = `${state.sets.length} sets and ${state.cardio.length} cardio sessions over ${days} ` +
-    `${days === 1 ? 'day' : 'days'} on this phone · ${pendingCount()} waiting to sync.`;
+  const finished = state.workouts.filter((w) => w.id !== state.current.activeWorkout).length;
+  els.sStats.textContent = `${finished} workouts, ${state.sets.length} sets and ${state.cardio.length} cardio sessions ` +
+    `on this phone · ${pendingCount()} waiting to sync.`;
 }
 
 function renderExerciseList() {
   els.sExList.replaceChildren();
   for (const category of CATEGORIES) {
-    const defs = state.exercises
-      .filter((e) => (CATEGORIES.includes(e.category) ? e.category : 'Custom') === category)
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const defs = state.exercises.filter((e) => categoryOf(e) === category).sort((a, b) => a.name.localeCompare(b.name));
     if (!defs.length) continue;
     els.sExList.append(el('h4', null, category));
     const ul = el('ul', 'ex-list');
@@ -1111,7 +1532,7 @@ function renderExerciseList() {
       const del = button('del', '×', () => {
         if (!confirm(`Remove “${def.name}” from the list? Logged sets are kept.`)) return;
         state.exercises = state.exercises.filter((e) => e !== def);
-        persist();
+        persistQuietly();
         renderExerciseList();
       });
       del.setAttribute('aria-label', `Remove ${def.name}`);
@@ -1132,11 +1553,7 @@ function editVariations(def) {
     seen.add(key);
     return true;
   });
-  const c = state.current;
-  if (c.exercise === def.name && c.variation && !def.variations.includes(c.variation)) {
-    c.variation = def.variations[0] || '';
-  }
-  persist();
+  persistQuietly();
   renderExerciseList();
 }
 
@@ -1148,7 +1565,7 @@ function renderActivityList() {
     const del = button('del', '×', () => {
       if (!confirm(`Remove “${name}”? Logged sessions are kept.`)) return;
       state.activities = state.activities.filter((a) => a !== name);
-      persist();
+      persistQuietly();
       renderActivityList();
     });
     del.setAttribute('aria-label', `Remove ${name}`);
@@ -1166,7 +1583,7 @@ function readSettings() {
   const weightStep = parseNum(els.sWeightStep.value);
   if (repStep > 0) s.repStep = Math.round(repStep);
   if (weightStep > 0) s.weightStep = round(weightStep);
-  persist();
+  persistQuietly();
 }
 
 function setMsg(node, text, kind = '') {
@@ -1186,25 +1603,42 @@ function openSettings() {
 function init() {
   document.querySelectorAll('[id]').forEach((node) => { els[node.id] = node; });
 
-  // A remembered exercise may predate variations; pick a valid one.
-  const c = state.current;
-  const vars = exerciseDef(c.exercise)?.variations || [];
-  if (c.exercise && vars.length && !vars.includes(c.variation)) c.variation = vars[0];
-
+  // Steppers and number inputs
   document.querySelectorAll('[data-step]').forEach((b) =>
     b.addEventListener('click', () => step(b.dataset.step, Number(b.dataset.dir))));
+  for (const input of [els.reps, els.weight]) {
+    input.addEventListener('change', () => { readLogger(); renderLogger(); });
+  }
+  for (const input of [els.cDuration, els.cDistance, els.cFloors, els.cLevel]) {
+    input.addEventListener('change', () => { readCardio(); renderCardioForm(); });
+  }
   for (const input of document.querySelectorAll('.stepper input')) {
     input.addEventListener('focus', () => input.select());
-    input.addEventListener('change', () => { readForm(); renderForm(); });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
   }
-  els.modeSeg.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+  // Home
+  els.startBtn.addEventListener('click', openTemplates);
+  els.resumeBtn.addEventListener('click', () => showView('workout'));
+  els.activeFinishBtn.addEventListener('click', finishWorkout);
+  els.cardioBtn.addEventListener('click', () => showView('cardio'));
+
+  // Workout
+  els.workoutBack.addEventListener('click', () => { readLogger(); showView('home'); });
+  els.wName.addEventListener('click', renameWorkout);
+  els.finishBtn.addEventListener('click', finishWorkout);
+  els.addExerciseBtn.addEventListener('click', () => openPicker('add'));
+  els.logSetBtn.addEventListener('click', logSet);
+  els.swapBtn.addEventListener('click', () => openPicker('swap', activeWorkout().focus));
+  els.removeItemBtn.addEventListener('click', removeItem);
+
+  // Cardio
+  els.cardioBack.addEventListener('click', () => { readCardio(); showView('home'); });
   els.cardioSeg.querySelectorAll('[data-cardio]').forEach((b) =>
     b.addEventListener('click', () => chooseCardioType(b.dataset.cardio)));
+  els.cardioSaveBtn.addEventListener('click', logCardio);
 
-  els.saveBtn.addEventListener('click', logEntry);
-  els.undoBtn.addEventListener('click', undoLast);
-  els.exerciseBtn.addEventListener('click', openPicker);
+  // Sheets
   els.pickerSearch.addEventListener('input', renderPicker);
   els.pickerSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onPickerEnter(); } });
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
@@ -1215,6 +1649,7 @@ function init() {
     sync();
   });
 
+  // Settings
   els.settingsBtn.addEventListener('click', openSettings);
   els.settings.addEventListener('close', () => { readSettings(); renderAll(); sync(); });
   for (const input of [els.sOwner, els.sRepo, els.sToken, els.sRepStep, els.sWeightStep]) {
@@ -1236,7 +1671,7 @@ function init() {
     const name = els.sNewAct.value.trim().replace(/\s+/g, ' ');
     if (name && !state.activities.some((a) => a.toLowerCase() === name.toLowerCase())) {
       state.activities.push(name);
-      persist();
+      persistQuietly();
     }
     els.sNewAct.value = '';
     renderActivityList();
@@ -1265,9 +1700,12 @@ function init() {
   window.addEventListener('online', () => { state.noSignal = false; sync(); });
   window.addEventListener('offline', renderStatus);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') { renderAll(); sync(); } // also rolls "Today" over after midnight
+    if (document.visibilityState === 'visible') { renderAll(); sync(); }
   });
-  setInterval(() => { if (pendingCount() && !state.syncing) sync(); }, 30000);
+  setInterval(() => {
+    if (pendingCount() && !state.syncing) sync();
+    if (currentView() === 'workout') renderWorkoutMeta(); // keep the elapsed time ticking
+  }, 30000);
 
   // Ask Safari not to evict our storage; home-screen apps are normally exempt anyway.
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -1281,7 +1719,7 @@ function init() {
     });
   }
 
-  try { persist(); } catch { /* first-run migration is retried on the next save */ }
+  persistQuietly(); // saves any catalogue migration
   renderAll();
   sync();
 }

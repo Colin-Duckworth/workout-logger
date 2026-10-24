@@ -1,12 +1,12 @@
 # Workout Log
 
-A phone-first workout logger for weight training and cardio that runs as a home-screen web app. Entries save to
-the phone instantly, even with no signal, then sync as monthly CSV files to a private GitHub repo you can `git pull`
-and hand to AI.
+A phone-first logger for workouts and cardio that runs as a home-screen web app. Entries save to the phone
+instantly, even with no signal, then sync as monthly CSV files to a private GitHub repo you can `git pull` and
+hand to AI.
 
 - **App:** this repo, hosted free on GitHub Pages: https://colin-duckworth.github.io/workout-logger/
 - **Data:** private repo [`workout-data`](https://github.com/Colin-Duckworth/workout-data), one file per month per type:
-  `sets/2026-10.csv` (weights) and `cardio/2026-10.csv`
+  `workouts/2026-10.csv`, `sets/2026-10.csv` and `cardio/2026-10.csv`
 
 Plain HTML/CSS/JS with no build step and no dependencies.
 
@@ -32,17 +32,23 @@ The token is stored only on your phone. Use the home-screen icon from now on: th
 storage, separate from the Safari tab.
 
 ## Using it
-Switch between **Weights** and **Cardio** at the top of the form.
+The home screen has **Start workout**, **Log cardio**, and your **History**.
 
-### Weights
-- **Pick an exercise.** Recent ones are at the top, then Push / Pull / Legs / Arms / Core. Type a new name to add it.
-- **Pick a variation** (Barbell, Dumbbell, Smith Machine…) from the chips under the exercise. Use **+ Variation** to
-  add your own. Each variation is tracked on its own: set numbers, the "last time" hint, and the starting reps
-  and weight all come from that exact variation.
-- **Adjust with − / +**, or tap a number to type it. Weight accepts `82,5` or `82.5`.
-- **Log set.** The values stay filled in, so the next set is usually one tap. Set numbers count up automatically;
-  use the Set stepper to override.
-- **Bodyweight moves** (Pull-up, Dip, …): log `0` kg, or the added weight for the *Weighted* variation.
+### Workouts
+- **Start workout** offers a **blank workout** or a template: Push A/B, Pull A/B, Legs A/B, Rehab A/B. Each
+  template shows when you last did it.
+- Each exercise is a card with its target (e.g. *Dumbbell · 3 × 6–10 · per arm*) and a progress count. The open
+  card has the variation chips, a "last time" hint, the sets you've logged, and reps/weight steppers.
+- **Log set.** Reps and weight start from what you did last time on that exact exercise + variation. When you hit
+  the target number of sets, the next unfinished exercise opens. Tap any card to jump to it.
+- **Swap exercise** (e.g. back squat → hack squat) or **Remove** it while it has no sets. **+ Add exercise** adds
+  anything. **+ Variation** adds your own variation.
+- Tap the workout name to rename it. **‹** goes home and leaves the workout running; home shows **Resume**.
+- **Finish** saves the end time and duration. A workout with no sets is discarded. If you forget to tap
+  Finish, the workout ends at your last set rather than when you eventually tap it.
+- **History:** tap a workout to see its exercises, then **Edit** to reopen it or **Delete** to remove it (from
+  GitHub too).
+- **Bodyweight moves** (Pull-up, Dip, Nordic Curl, …): log `0` kg, or the added weight for the *Weighted* variation.
 
 ### Cardio
 - **Running:** duration and distance. Pace is calculated for you.
@@ -51,38 +57,48 @@ Switch between **Weights** and **Cardio** at the top of the form.
 - **Duration** accepts minutes (`45`) or minutes and seconds. The iPhone number pad has no colon, so `32.15` or
   `32,15` means 32:15. `1:05:00` works too.
 
-### Both
-- **Undo** in the confirmation toast, **Undo last** next to Today, or **×** on any entry to delete it. Tap a group
-  title under Today to jump back to that exercise or activity.
+### Everything else
+- **Undo** is in the confirmation toast; **×** deletes any single set or cardio session.
 - **Sync pill** (top right): `✓ Synced`, `N pending`, `No signal · N pending`, or `Sync failed`. Tap it to retry or
-  see the error. Sync runs after every set, when signal returns, when you reopen the app, and every 30 s while
-  anything is pending. Orange dots mark entries that haven't synced yet.
+  see the error. Sync runs after every entry, when signal returns, when you reopen the app, and every 30 s while
+  anything is pending. Orange dots mark sets that haven't synced yet.
 - **Settings:** stepper sizes, exercises and their variations (tap one to edit), other cardio activities,
-  **Export all sets as CSV** (fallback without GitHub), and
-  **Restore history from GitHub** (for a new phone or after clearing Safari data).
+  **Export everything as CSV** (fallback without GitHub), and **Restore history from GitHub** (for a new phone or
+  after clearing Safari data).
 
 ## Getting the data on your computer
 ```bash
 git clone https://github.com/Colin-Duckworth/workout-data.git
 ```
 After that, `git pull` inside `workout-data` gets the latest. For a monthly review, open Claude Code in that folder and
-ask something like *"Analyse sets/2026-10.csv and cardio/2026-10.csv: progress on main lifts, weekly volume,
-running pace trends, consistency, stalls, compared with last month."*
+ask something like *"Analyse October (workouts/, sets/ and cardio/ 2026-10.csv): progress on main lifts per
+template, weekly volume, running pace, consistency, stalls, compared with last month."*
 
 If you ever fix a typo in a CSV on your computer, `git pull` first, then commit and push. The app merges by `id`,
-so your edit stays unless you also delete that set on the phone.
+so your edit stays unless you also change that entry on the phone.
 
 ## CSV schema
-### `sets/YYYY-MM.csv`: one row per set (long format)
+### `workouts/YYYY-MM.csv`: one row per workout
+| column | example | notes |
+|---|---|---|
+| `id` | `b9f9…` | UUID; sets point at it with `workout_id` |
+| `date` | `2026-10-24` | the day the workout started |
+| `name` | `Push A` | template name, `Workout` for blank ones, or whatever you renamed it to |
+| `template` | `Push A` | blank if started without a template |
+| `started_at`, `ended_at` | `2026-10-24T18:05:12.345+02:00` | phone's local time with offset |
+| `duration_min` | `62` | |
 
+### `sets/YYYY-MM.csv`: one row per set (long format)
 | column | example | notes |
 |---|---|---|
 | `id` | `3f2c…` | UUID made on the phone; sync merges on it, so rows never duplicate |
-| `timestamp` | `2026-10-24T18:05:12.345+02:00` | when the set was logged, phone's local time with offset |
-| `date` | `2026-10-24` | local date, for grouping by day/week/month |
+| `timestamp` | `2026-10-24T18:05:12.345+02:00` | when the set was logged |
+| `date` | `2026-10-24` | the workout's date (stays the same if a workout runs past midnight) |
+| `workout_id` | `b9f9…` | links to `workouts/*.csv`; blank for sets logged before workouts existed |
+| `workout` | `Push A` | workout name, so the file reads on its own |
 | `exercise` | `Bench Press` | |
 | `variation` | `Dumbbell` | blank for exercises without variations |
-| `set_number` | `3` | per exercise + variation per day |
+| `set_number` | `3` | per exercise within the workout |
 | `reps` | `5` | |
 | `weight_kg` | `82.5` | `0` for bodyweight movements |
 | `rpe` | `8` | optional, blank if not entered |
@@ -115,8 +131,8 @@ Then open http://localhost:8000.
 
 ## How it works
 - `index.html`, `styles.css`: UI. Large touch targets, dark mode follows the system setting.
-- `app.js`: logging, today's list, picker, settings, and sync. Entries live in `localStorage` (the phone is the
-  source of truth). Sync reads the month's CSV through the GitHub Contents API, adds new entries and removes
-  deleted ones by `id`, and writes it back. It retries if the file changed in between. The exercise catalogue
-  (`DEFAULT_EXERCISES`) is at the top of the file.
+- `app.js`: logging, history, templates, picker, settings, and sync. The exercise catalogue (`DEFAULT_EXERCISES`)
+  and workout templates (`TEMPLATES`) are at the top of the file. Entries live in `localStorage` (the phone is the
+  source of truth). Sync reads each month's CSV through the GitHub Contents API, adds new and changed entries and
+  removes deleted ones by `id`, and writes it back. It retries if the file changed in between.
 - `sw.js`: service worker that caches the app so it opens with no signal.
