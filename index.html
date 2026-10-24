@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Workout Log</title>
+  <meta name="description" content="Offline-first workout set logger that syncs to CSV on GitHub.">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Workouts">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Workout Log</h1>
+    <button id="syncBtn" class="pill" type="button">…</button>
+    <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">⚙︎</button>
+  </header>
+
+  <main>
+    <section class="card" aria-label="Log a set">
+      <button id="exerciseBtn" class="exercise-btn" type="button">Choose exercise</button>
+      <p id="lastSession" class="hint"></p>
+
+      <div class="field">
+        <label for="reps">Reps</label>
+        <div class="stepper">
+          <button type="button" data-step="reps" data-dir="-1" aria-label="Fewer reps">−</button>
+          <input id="reps" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+          <button type="button" data-step="reps" data-dir="1" aria-label="More reps">+</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="weight">Weight (kg)</label>
+        <div class="stepper">
+          <button type="button" data-step="weight" data-dir="-1" aria-label="Less weight">−</button>
+          <input id="weight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+          <button type="button" data-step="weight" data-dir="1" aria-label="More weight">+</button>
+        </div>
+      </div>
+
+      <div class="field inline">
+        <label for="setNum">Set</label>
+        <div class="stepper small">
+          <button type="button" data-step="set" data-dir="-1" aria-label="Previous set number">−</button>
+          <input id="setNum" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+          <button type="button" data-step="set" data-dir="1" aria-label="Next set number">+</button>
+        </div>
+      </div>
+
+      <details id="more">
+        <summary>RPE &amp; notes <span class="optional">optional</span></summary>
+        <div class="more-body">
+          <label class="text-label">RPE
+            <input id="rpe" class="text-input" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 8">
+          </label>
+          <label class="text-label">Notes
+            <input id="notes" class="text-input" type="text" autocomplete="off" placeholder="e.g. paused reps, belt">
+          </label>
+        </div>
+      </details>
+
+      <button id="saveBtn" class="primary" type="button">Log set</button>
+    </section>
+
+    <section aria-label="Today's sets">
+      <div class="today-head">
+        <h2>Today</h2>
+        <button id="undoBtn" class="link-btn" type="button" hidden>Undo last</button>
+      </div>
+      <div id="today"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+    <span id="toastMsg"></span>
+    <button id="toastAction" type="button" hidden></button>
+  </div>
+
+  <dialog id="picker" class="sheet">
+    <div class="sheet-head">
+      <input id="pickerSearch" class="text-input" type="search" placeholder="Search or add…" autocomplete="off" autocapitalize="words" enterkeyhint="go">
+      <button class="close" type="button" data-close autofocus>Done</button>
+    </div>
+    <div id="pickerList" class="sheet-body"></div>
+  </dialog>
+
+  <dialog id="settings" class="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button class="close" type="button" data-close autofocus>Done</button>
+    </div>
+    <div class="sheet-body">
+      <section class="settings-group">
+        <h3>GitHub sync</h3>
+        <label class="text-label">Owner
+          <input id="sOwner" class="text-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false">
+        </label>
+        <label class="text-label">Data repo
+          <input id="sRepo" class="text-input" type="text" autocapitalize="off" autocorrect="off" spellcheck="false">
+        </label>
+        <label class="text-label">Access token
+          <input id="sToken" class="text-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+        </label>
+        <button id="sTest" class="secondary" type="button">Save &amp; test connection</button>
+        <p id="sTestMsg" class="hint"></p>
+      </section>
+
+      <section class="settings-group">
+        <h3>Steppers</h3>
+        <div class="two-col">
+          <label class="text-label">Reps ±
+            <input id="sRepStep" class="text-input" type="text" inputmode="numeric" autocomplete="off">
+          </label>
+          <label class="text-label">Weight ± (kg)
+            <input id="sWeightStep" class="text-input" type="text" inputmode="decimal" autocomplete="off">
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3>Exercises</h3>
+        <div class="add-row">
+          <input id="sNewEx" class="text-input" type="text" placeholder="New exercise" autocomplete="off" autocapitalize="words" enterkeyhint="done">
+          <button id="sAddEx" class="secondary" type="button">Add</button>
+        </div>
+        <ul id="sExList" class="ex-list"></ul>
+      </section>
+
+      <section class="settings-group">
+        <h3>Data</h3>
+        <p id="sStats" class="hint"></p>
+        <button id="sExport" class="secondary" type="button">Export all sets as CSV</button>
+        <button id="sRestore" class="secondary" type="button">Restore history from GitHub</button>
+        <p id="sDataMsg" class="hint"></p>
+      </section>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
