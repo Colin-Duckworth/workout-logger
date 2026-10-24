@@ -44,6 +44,9 @@ The home screen has **Start workout**, **Log cardio**, and your **History**.
 - **Swap exercise** (e.g. back squat → hack squat) or **Remove** it while it has no sets. **+ Add exercise** adds
   anything. **+ Variation** adds your own variation.
 - Tap the workout name to rename it. **‹** goes home and leaves the workout running; home shows **Resume**.
+- **Cancel** (on the home card, or *Cancel workout* at the bottom of the workout) throws the workout away along
+  with any sets logged in it, including on GitHub. For a workout reopened from History it says **Close** /
+  *Stop editing* instead and keeps everything.
 - **Finish** saves the end time and duration. A workout with no sets is discarded. If you forget to tap
   Finish, the workout ends at your last set rather than when you eventually tap it.
 - **History:** tap a workout to see its exercises, then **Edit** to reopen it or **Delete** to remove it (from

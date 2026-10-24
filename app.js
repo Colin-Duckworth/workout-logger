@@ -564,6 +564,7 @@ function renderHome() {
     const n = workoutSets(w).length;
     els.activeName.textContent = w.name;
     els.activeMeta.textContent = `${fmtDate(w.date)} · started ${fmtTime(w.started_at)} · ${n} ${n === 1 ? 'set' : 'sets'}`;
+    els.activeCancelBtn.textContent = isReopened(w) ? 'Close' : 'Cancel';
   }
   renderHistory();
 }
@@ -661,6 +662,7 @@ function renderWorkout() {
   const w = activeWorkout();
   if (!w) return;
   els.wName.textContent = w.name;
+  els.cancelWorkoutBtn.textContent = isReopened(w) ? 'Stop editing' : 'Cancel workout';
   renderWorkoutMeta();
 
   els.exerciseList.replaceChildren();
@@ -1057,17 +1059,40 @@ function editWorkout(id) {
   showView('workout');
 }
 
-function deleteWorkout(w, sets) {
-  const label = w ? `${w.name} on ${fmtDate(w.date)}` : `sets from ${fmtDate(sets[0].date)}`;
-  if (!confirm(`Delete ${label} (${sets.length} sets)? This removes it from GitHub too.`)) return;
+// Delete a workout and its sets here and (on the next sync) on GitHub.
+function dropWorkout(w, sets, message) {
   const ids = new Set(sets.map((s) => s.id));
   state.sets = state.sets.filter((s) => !ids.has(s.id));
   sets.forEach((s) => state.tombstones.push({ id: s.id, date: s.date, kind: 'strength' }));
   if (w) removeWorkout(w);
   try { persist(); } catch (e) { return toast(`Could not save: ${e.message}`, { error: true }); }
-  renderAll();
-  toast('Workout deleted');
+  showView('home');
+  toast(message);
   sync();
+}
+
+function deleteWorkout(w, sets) {
+  const label = w ? `${w.name} on ${fmtDate(w.date)}` : `sets from ${fmtDate(sets[0].date)}`;
+  if (!confirm(`Delete ${label} (${sets.length} sets)? This removes it from GitHub too.`)) return;
+  dropWorkout(w, sets, 'Workout deleted');
+}
+
+// A workout reopened from history was already finished: "cancel" just stops editing it.
+const isReopened = (w) => !!w.ended_at;
+
+function cancelWorkout() {
+  const w = activeWorkout();
+  if (!w) return;
+  readLogger();
+  if (isReopened(w)) {
+    state.current.activeWorkout = null;
+    showView('home');
+    return toast('Stopped editing');
+  }
+  const sets = workoutSets(w);
+  const n = `${sets.length} logged ${sets.length === 1 ? 'set' : 'sets'}`;
+  if (sets.length && !confirm(`Cancel ${w.name}? Its ${n} will be deleted.`)) return;
+  dropWorkout(w, sets, 'Workout cancelled');
 }
 
 // ---------- shared entry actions ----------
@@ -1621,12 +1646,14 @@ function init() {
   els.startBtn.addEventListener('click', openTemplates);
   els.resumeBtn.addEventListener('click', () => showView('workout'));
   els.activeFinishBtn.addEventListener('click', finishWorkout);
+  els.activeCancelBtn.addEventListener('click', cancelWorkout);
   els.cardioBtn.addEventListener('click', () => showView('cardio'));
 
   // Workout
   els.workoutBack.addEventListener('click', () => { readLogger(); showView('home'); });
   els.wName.addEventListener('click', renameWorkout);
   els.finishBtn.addEventListener('click', finishWorkout);
+  els.cancelWorkoutBtn.addEventListener('click', cancelWorkout);
   els.addExerciseBtn.addEventListener('click', () => openPicker('add'));
   els.logSetBtn.addEventListener('click', logSet);
   els.swapBtn.addEventListener('click', () => openPicker('swap', activeWorkout().focus));

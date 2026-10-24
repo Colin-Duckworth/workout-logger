@@ -142,6 +142,9 @@ main { max-width: 560px; margin: 0 auto; padding: 0 16px 120px; }
 }
 .secondary:active { background: var(--pressed); }
 .secondary:disabled { opacity: .5; }
+.secondary.danger { color: var(--danger); }
+.btn-pair .secondary { padding: 0 8px; }
+.cancel-workout { display: block; margin: 12px auto 0; }
 
 .link-btn {
   min-height: 44px;
@@ -270,7 +273,7 @@ details[open] summary::before { transform: rotate(90deg); }
   text-transform: uppercase;
 }
 .active-card strong { display: block; font-size: 1.35rem; }
-.btn-pair { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
+.btn-pair { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
 .btn-pair .primary { min-height: 52px; font-size: 1.1rem; }
 .btn-pair .secondary { min-height: 52px; border-radius: 14px; }
 
