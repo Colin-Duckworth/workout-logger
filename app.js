@@ -14,6 +14,9 @@
  * and anything already in the file (e.g. edits made on a computer) is preserved.
  */
 
+// Stamped by release.sh (same value as sw.js VERSION) and shown in Settings.
+const APP_VERSION = '20261025-210826';
+
 const WORKOUT_COLUMNS = ['id', 'date', 'name', 'template', 'started_at', 'ended_at', 'duration_min'];
 const SET_COLUMNS = ['id', 'timestamp', 'date', 'workout_id', 'workout', 'exercise', 'variation', 'set_number', 'reps',
   'weight_kg', 'warmup', 'failure', 'rpe', 'notes'];
@@ -1637,6 +1640,7 @@ function renderSettings() {
   renderExerciseList();
   renderActivityList();
   const finished = state.workouts.filter((w) => w.id !== state.current.activeWorkout).length;
+  els.sVersion.textContent = `App version ${APP_VERSION}`;
   els.sStats.textContent = `${finished} workouts, ${state.sets.length} sets and ${state.cardio.length} cardio sessions ` +
     `on this phone · ${pendingCount()} waiting to sync.`;
 }

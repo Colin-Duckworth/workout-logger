@@ -8,6 +8,7 @@ message="${1:-Update app}"
 version="$(date +%Y%m%d-%H%M%S)"
 
 sed -i "s/^const VERSION = '.*';/const VERSION = '${version}';/" sw.js
+sed -i "s/^const APP_VERSION = '.*';/const APP_VERSION = '${version}';/" app.js
 git add -A
 git commit -m "${message}"
 git push
