@@ -50,8 +50,8 @@ The home screen has **Start workout**, **Log cardio**, and your **History**.
 - **Cancel** (on the home card, or *Cancel workout* at the bottom of the workout) throws the workout away along
   with any sets logged in it, including on GitHub. For a workout reopened from History it says **Close** /
   *Stop editing* instead and keeps everything.
-- **Finish** saves the end time and duration. A workout with no sets is discarded. If you forget to tap
-  Finish, the workout ends at your last set rather than when you eventually tap it.
+- **Finish** saves the end time and duration. A workout with no sets is discarded. The workout ends at the
+  last set before any 30-minute gap, so a late Finish or a set typed in hours afterwards doesn't stretch it.
 - **History:** tap a workout to see its exercises, then **Edit** to reopen it or **Delete** to remove it (from
   GitHub too).
 - **Bodyweight moves** (Pull-up, Dip, Nordic Curl, …): log `0` kg, or the added weight for the *Weighted* variation.

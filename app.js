@@ -1111,10 +1111,13 @@ function finishWorkout() {
     if (!confirm('No sets logged. Discard this workout?')) return;
     removeWorkout(w);
   } else {
-    // If Finish comes long after the last set (you forgot to tap it), end the workout at the last set.
-    const now = new Date();
-    const lastAt = new Date(sets[sets.length - 1].timestamp);
-    const end = now - lastAt > 30 * 60000 ? lastAt : now;
+    // The workout ends at the last activity before the first 30-minute gap, so neither a late Finish
+    // nor a set typed in hours afterwards stretches the duration.
+    let end = new Date(sets[0].timestamp);
+    for (const t of [...sets.map((s) => new Date(s.timestamp)), new Date()]) {
+      if (t - end > 30 * 60000) break;
+      end = t;
+    }
     w.ended_at = localIso(end);
     w.duration_min = Math.max(1, Math.round((end - new Date(w.started_at)) / 60000));
     w.dirty = true;

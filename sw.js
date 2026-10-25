@@ -1,6 +1,6 @@
 // Service worker: caches the app shell so it opens instantly, even with no signal.
 // Cache-first; release.sh bumps VERSION, which makes phones download the new files in one go.
-const VERSION = '20261024-153657';
+const VERSION = '20261025-210558';
 const CACHE = `workout-log-${VERSION}`;
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-512.png'];
 
