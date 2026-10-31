@@ -6,7 +6,7 @@ hand to AI.
 
 - **App:** this repo, hosted free on GitHub Pages: https://colin-duckworth.github.io/workout-logger/
 - **Data:** private repo [`workout-data`](https://github.com/Colin-Duckworth/workout-data), one file per month per type:
-  `workouts/2026-10.csv`, `sets/2026-10.csv` and `cardio/2026-10.csv`
+  `workouts/2026-10.csv`, `sets/2026-10.csv`, `cardio/2026-10.csv` and `bodyweight/2026-10.csv`
 
 Plain HTML/CSS/JS with no build step and no dependencies.
 
@@ -32,7 +32,7 @@ The token is stored only on your phone. Use the home-screen icon from now on: th
 storage, separate from the Safari tab.
 
 ## Using it
-The home screen has **Start workout**, **Log cardio**, and your **History**.
+The home screen has **Start workout**, **Log cardio**, **Log weight**, and your **History**.
 
 ### Workouts
 - **Start workout** offers a **blank workout** or a template: Push A/B, Pull A/B, Legs A/B, Rehab A/B. Each
@@ -62,6 +62,11 @@ The home screen has **Start workout**, **Log cardio**, and your **History**.
 - **Other:** pick an activity (Basketball, Swimming, Padel, Soccer, …, or **+ Activity**) and the duration.
 - **Duration** accepts minutes (`45`) or minutes and seconds. The iPhone number pad has no colon, so `32.15` or
   `32,15` means 32:15. `1:05:00` works too.
+
+### Body weight
+- **Log weight** opens today's weigh-in, starting from your last weight (±0.1 kg steps, or type it).
+- One weigh-in per day: saving again for the same day replaces it. Change the date to fill in a day you missed.
+- Shows your 7-day average against the week before, and recent weigh-ins with the change from the previous one.
 
 ### Everything else
 - **Undo** is in the confirmation toast; **×** deletes any single set or cardio session.
@@ -122,6 +127,14 @@ so your edit stays unless you also change that entry on the phone.
 | `floors` | `105` | stairmaster only |
 | `level` | `9` | stairmaster speed level |
 | `notes` | `intervals` | optional |
+
+### `bodyweight/YYYY-MM.csv`: one row per day
+| column | example | notes |
+|---|---|---|
+| `id`, `timestamp` | | as above; `timestamp` is when it was last saved |
+| `date` | `2026-10-31` | the day the weigh-in is for (one row per date) |
+| `weight_kg` | `82.4` | |
+| `notes` | `after breakfast` | optional |
 
 ## Releasing changes
 Edit the files, then:

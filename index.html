@@ -39,7 +39,10 @@
         </div>
       </div>
       <button id="startBtn" class="primary start-btn" type="button">Start workout</button>
-      <button id="cardioBtn" class="secondary start-btn" type="button">Log cardio</button>
+      <div class="home-row">
+        <button id="cardioBtn" class="secondary start-btn" type="button">Log cardio</button>
+        <button id="weightBtn" class="secondary start-btn" type="button">Log weight<small id="weightBtnSub"></small></button>
+      </div>
 
       <h2 class="section-title">History</h2>
       <div id="history"></div>
@@ -56,6 +59,42 @@
       <div id="exerciseList"></div>
       <button id="addExerciseBtn" class="secondary" type="button">+ Add exercise</button>
       <button id="cancelWorkoutBtn" class="link-btn danger cancel-workout" type="button">Cancel workout</button>
+    </section>
+
+    <!-- Body weight: one weigh-in per day -->
+    <section id="bodyweightView" aria-label="Body weight" hidden>
+      <div class="view-head">
+        <button id="bwBack" class="back-btn" type="button" aria-label="Home">‹</button>
+        <h2 class="view-title">Body weight</h2>
+      </div>
+      <div class="card">
+        <label class="text-label">Date
+          <input id="bwDate" class="text-input" type="date">
+        </label>
+
+        <div class="field">
+          <label for="bwWeight">Weight (kg)</label>
+          <div class="stepper">
+            <button type="button" data-step="bw" data-dir="-1" aria-label="Less">−</button>
+            <input id="bwWeight" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done">
+            <button type="button" data-step="bw" data-dir="1" aria-label="More">+</button>
+          </div>
+        </div>
+        <p id="bwHint" class="hint"></p>
+
+        <details>
+          <summary>Notes <span class="optional">optional</span></summary>
+          <div class="more-body">
+            <input id="bwNotes" class="text-input" type="text" autocomplete="off" placeholder="e.g. after breakfast" aria-label="Notes">
+          </div>
+        </details>
+
+        <button id="bwSaveBtn" class="primary" type="button">Log weight</button>
+      </div>
+
+      <p id="bwStats" class="bw-stats" hidden></p>
+      <h2 id="bwListTitle" class="section-title" hidden>Recent weigh-ins</h2>
+      <div id="bwList" class="bw-list" hidden></div>
     </section>
 
     <!-- Cardio -->

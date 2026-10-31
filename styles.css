@@ -251,10 +251,27 @@ details[open] summary::before { transform: rotate(90deg); }
   font-weight: 400;
 }
 .text-input:focus { outline: none; border-color: var(--accent); }
+.text-input[type="date"] { display: flex; align-items: center; -webkit-appearance: none; appearance: none; }
 
 /* ---------- home ---------- */
 .start-btn { width: 100%; min-height: 72px; }
-.start-btn.secondary { min-height: 60px; margin-top: 10px; border-radius: 14px; font-size: 1.15rem; }
+.start-btn.secondary { min-height: 60px; border-radius: 14px; font-size: 1.15rem; }
+.home-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.start-btn small { display: block; color: var(--muted); font-size: .8rem; font-weight: 600; }
+.start-btn small:empty { display: none; }
+
+#bodyweightView .card { margin-top: 14px; }
+.bw-stats {
+  margin: 14px 0 0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 700;
+}
+.bw-list { padding: 0 6px 0 16px; border-radius: var(--radius); background: var(--surface); }
+.set-row.bw-row { grid-template-columns: 7em auto 1fr 10px 44px; gap: 10px; }
+.bw-row:first-child { border-top: 0; }
+.bw-date { color: var(--muted); font-size: .95rem; white-space: nowrap; }
 
 .active-card {
   display: grid;

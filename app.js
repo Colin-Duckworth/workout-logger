@@ -15,12 +15,13 @@
  */
 
 // Stamped by release.sh (same value as sw.js VERSION) and shown in Settings.
-const APP_VERSION = '20261025-210826';
+const APP_VERSION = '20261031-132933';
 
 const WORKOUT_COLUMNS = ['id', 'date', 'name', 'template', 'started_at', 'ended_at', 'duration_min'];
 const SET_COLUMNS = ['id', 'timestamp', 'date', 'workout_id', 'workout', 'exercise', 'variation', 'set_number', 'reps',
   'weight_kg', 'warmup', 'failure', 'rpe', 'notes'];
 const CARDIO_COLUMNS = ['id', 'timestamp', 'date', 'activity', 'duration_min', 'distance_km', 'floors', 'level', 'notes'];
+const BODYWEIGHT_COLUMNS = ['id', 'timestamp', 'date', 'weight_kg', 'notes'];
 
 const CATEGORIES = ['Push', 'Pull', 'Legs', 'Arms', 'Core', 'Rehab', 'Custom'];
 
@@ -171,6 +172,7 @@ const KEY = {
   workouts: 'wl.workouts',
   sets: 'wl.sets',
   cardio: 'wl.cardio',
+  bodyweight: 'wl.bodyweight',
   tombstones: 'wl.tombstones',
   exercises: 'wl.exercises.v2',
   legacyExercises: 'wl.exercises',
@@ -230,6 +232,7 @@ const state = {
   workouts: load(KEY.workouts, []),       // [{id, date, name, template, started_at, ended_at, duration_min, items, focus}]
   sets: load(KEY.sets, []),               // weight-training sets, each tagged with workout_id
   cardio: load(KEY.cardio, []),           // cardio sessions
+  bodyweight: load(KEY.bodyweight, []),   // daily weigh-ins, one per date
   tombstones: load(KEY.tombstones, []).map((t) => ({ kind: 'strength', ...t })), // deleted, not yet removed from GitHub
   exercises: loadExercises(),             // [{name, category, variations}]
   activities: load(KEY.activities, DEFAULT_ACTIVITIES.slice()), // "Other" cardio activities
@@ -243,6 +246,7 @@ const state = {
     distance: 5,
     floors: 100,
     level: 8,
+    bodyweight: null,                     // weight in the body-weight form
     ...load(KEY.current, {}),
   },
   ui: { expanded: new Set(), historyLimit: 15, editSet: null },
@@ -258,6 +262,7 @@ const TABLES = {
   workouts: { key: 'workouts', dir: 'workouts', columns: WORKOUT_COLUMNS },
   strength: { key: 'sets', dir: 'sets', columns: SET_COLUMNS },
   cardio: { key: 'cardio', dir: 'cardio', columns: CARDIO_COLUMNS },
+  bodyweight: { key: 'bodyweight', dir: 'bodyweight', columns: BODYWEIGHT_COLUMNS },
 };
 const entries = (kind) => state[TABLES[kind].key];
 
@@ -266,6 +271,7 @@ function persist() {
   localStorage.setItem(KEY.workouts, JSON.stringify(state.workouts));
   localStorage.setItem(KEY.sets, JSON.stringify(state.sets));
   localStorage.setItem(KEY.cardio, JSON.stringify(state.cardio));
+  localStorage.setItem(KEY.bodyweight, JSON.stringify(state.bodyweight));
   localStorage.setItem(KEY.tombstones, JSON.stringify(state.tombstones));
   localStorage.setItem(KEY.exercises, JSON.stringify(state.exercises));
   localStorage.setItem(KEY.catalogVersion, JSON.stringify(CATALOG_VERSION));
@@ -428,6 +434,7 @@ function fromRow(kind, r) {
     };
   }
   const base = { id: r.id, timestamp: r.timestamp, date: r.date, notes: r.notes || '' };
+  if (kind === 'bodyweight') return { ...base, weight_kg: Number(r.weight_kg) || 0 };
   if (kind === 'cardio') {
     return {
       ...base,
@@ -572,8 +579,10 @@ function renderAll() {
   els.homeView.hidden = view !== 'home';
   els.workoutView.hidden = view !== 'workout';
   els.cardioView.hidden = view !== 'cardio';
+  els.bodyweightView.hidden = view !== 'bodyweight';
   if (view === 'home') renderHome();
   else if (view === 'workout') renderWorkout();
+  else if (view === 'bodyweight') renderBodyweight();
   else renderCardioForm();
   renderStatus();
 }
@@ -597,7 +606,118 @@ function renderHome() {
     els.activeMeta.textContent = `${fmtDate(w.date)} · started ${fmtTime(w.started_at)} · ${n} ${n === 1 ? 'set' : 'sets'}`;
     els.activeCancelBtn.textContent = isReopened(w) ? 'Close' : 'Cancel';
   }
+  const todays = weighInOn(today());
+  const last = weighInsDesc()[0];
+  els.weightBtnSub.textContent = todays ? `Today: ${fmtNum(todays.weight_kg)} kg` : last ? `Last: ${fmtNum(last.weight_kg)} kg` : '';
   renderHistory();
+}
+
+// ----- body weight -----
+
+function addDays(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return localDate(new Date(y, m - 1, d + n));
+}
+
+const weighInOn = (date) => state.bodyweight.find((e) => e.date === date);
+const weighInsDesc = () => [...state.bodyweight].sort((a, b) => b.date.localeCompare(a.date));
+const fmtSigned = (n) => `${n > 0 ? '+' : n < 0 ? '−' : '±'}${fmtNum(Math.abs(n))}`;
+
+function averageBetween(from, to) {
+  const list = state.bodyweight.filter((e) => e.date >= from && e.date <= to);
+  return list.length ? sum(list, (e) => e.weight_kg) / list.length : null;
+}
+
+function renderBodyweight() {
+  const t = today();
+  els.bwDate.max = t;
+  if (!els.bwDate.value) els.bwDate.value = t;
+  if (state.current.bodyweight == null) loadWeighInDraft();
+  const existing = weighInOn(els.bwDate.value);
+  setInput(els.bwWeight, fmtNum(state.current.bodyweight));
+  els.bwSaveBtn.textContent = existing ? 'Update weight' : 'Log weight';
+  els.bwHint.textContent = existing
+    ? `${fmtDate(existing.date)} already has ${fmtNum(existing.weight_kg)} kg. Saving replaces it.`
+    : '';
+
+  // This week's average against the week before smooths out day-to-day water swings.
+  const avg = averageBetween(addDays(t, -6), t);
+  const prev = averageBetween(addDays(t, -13), addDays(t, -7));
+  els.bwStats.hidden = avg == null;
+  els.bwStats.textContent = avg == null ? '' : `7-day average ${fmtNum(round(avg, 1))} kg` +
+    (prev == null ? '' : ` · ${fmtSigned(round(avg - prev, 1))} kg vs the week before`);
+
+  const list = weighInsDesc();
+  els.bwListTitle.hidden = !list.length;
+  els.bwList.hidden = !list.length;
+  els.bwList.replaceChildren();
+  list.slice(0, 30).forEach((e, i) => {
+    const before = list[i + 1];
+    const change = before ? fmtSigned(round(e.weight_kg - before.weight_kg, 1)) : '';
+    const del = button('del', '×', () => deleteEntry('bodyweight', e.id, { confirm: true }));
+    del.setAttribute('aria-label', `Delete weigh-in for ${fmtDate(e.date)}`);
+    const row = el('div', 'set-row bw-row');
+    row.append(el('span', 'bw-date', fmtDate(e.date)), el('span', 'set-main', `${fmtNum(e.weight_kg)} kg`),
+      el('span', 'set-meta', [change, e.notes].filter(Boolean).join(' · ')), pendingDot(e), del);
+    els.bwList.append(row);
+  });
+}
+
+// Fill the form from that day's weigh-in if there is one, else start from your latest weight.
+function loadWeighInDraft() {
+  const existing = weighInOn(els.bwDate.value);
+  state.current.bodyweight = existing ? existing.weight_kg : weighInsDesc()[0]?.weight_kg ?? state.current.bodyweight ?? 75;
+  els.bwNotes.value = existing ? existing.notes : '';
+}
+
+function openBodyweight() {
+  els.bwDate.value = today();
+  loadWeighInDraft();
+  showView('bodyweight');
+}
+
+function readBodyweight() {
+  const n = parseNum(els.bwWeight.value);
+  if (n > 0) state.current.bodyweight = round(n);
+  persistQuietly();
+}
+
+function logBodyweight() {
+  if (Date.now() - lastSaveAt < 400) return;
+  readBodyweight();
+  const weight = state.current.bodyweight;
+  if (!(weight >= 20 && weight <= 400)) return toast('Enter your weight in kg', { error: true });
+  const date = els.bwDate.value || today();
+  const notes = els.bwNotes.value.trim();
+  const existing = weighInOn(date);
+  if (!existing) {
+    addEntry('bodyweight', { id: uuid(), timestamp: localIso(), date, weight_kg: weight, notes, dirty: true },
+      `Logged ${fmtNum(weight)} kg for ${fmtDate(date)}`);
+    return;
+  }
+
+  // One weigh-in per day: replace that day's entry in place (same id, so its CSV row is updated, not duplicated).
+  const before = { ...existing };
+  Object.assign(existing, { timestamp: localIso(), weight_kg: weight, notes, dirty: true });
+  try { persist(); } catch (e) {
+    Object.assign(existing, before);
+    return toast(`Could not save on this phone: ${e.message}`, { error: true });
+  }
+  lastSaveAt = Date.now();
+  renderAll();
+  toast(`Updated ${fmtDate(date)} to ${fmtNum(weight)} kg`, {
+    action: {
+      label: 'Undo',
+      run: () => {
+        Object.assign(existing, before, { dirty: true });
+        persistQuietly();
+        loadWeighInDraft();
+        renderAll();
+        sync();
+      },
+    },
+  });
+  sync();
 }
 
 function renderHistory() {
@@ -1216,16 +1336,18 @@ function addEntry(kind, entry, message, onUndo) {
 function deleteEntry(kind, id, { confirm: ask = false } = {}) {
   const e = entries(kind).find((x) => x.id === id);
   if (!e) return;
-  const what = kind === 'strength'
-    ? `${liftName(e)} ${e.warmup ? 'warm-up set' : `set #${e.set_number}`} (${setText(e)})`
-    : `${e.activity} (${describeCardio(e)})`;
+  const what = {
+    strength: () => `${liftName(e)} ${e.warmup ? 'warm-up set' : `set #${e.set_number}`} (${setText(e)})`,
+    cardio: () => `${e.activity} (${describeCardio(e)})`,
+    bodyweight: () => `the weigh-in for ${fmtDate(e.date)} (${fmtNum(e.weight_kg)} kg)`,
+  }[kind]();
   if (ask && !confirm(`Delete ${what}?`)) return;
   state[TABLES[kind].key] = entries(kind).filter((x) => x.id !== id);
   state.tombstones.push({ id, date: e.date, kind });
   if (kind === 'strength') renumber(e);
   try { persist(); } catch (err) { return toast(`Could not save: ${err.message}`, { error: true }); }
   renderAll();
-  toast(kind === 'strength' ? 'Set deleted' : 'Session deleted');
+  toast({ strength: 'Set deleted', cardio: 'Session deleted', bodyweight: 'Weigh-in deleted' }[kind]);
   sync();
 }
 
@@ -1240,6 +1362,13 @@ function step(field, dir) {
     else item.draft.weight = Math.max(0, round(item.draft.weight + dir * weightStep));
     persistQuietly();
     renderLogger();
+    return;
+  }
+  if (field === 'bw') {
+    readBodyweight();
+    c.bodyweight = Math.max(0, round(c.bodyweight + dir * 0.1));
+    persistQuietly();
+    renderBodyweight();
     return;
   }
   readCardio();
@@ -1546,6 +1675,7 @@ async function sync() {
     // Only refresh the parts showing sync state; a full re-render could pull focus from an input.
     if (currentView() === 'workout') renderLogger();
     else if (currentView() === 'home') renderHome();
+    else if (currentView() === 'bodyweight') renderBodyweight();
     renderStatus();
     if (state.syncQueued) { state.syncQueued = false; sync(); }
   }
@@ -1750,6 +1880,13 @@ function init() {
   els.activeFinishBtn.addEventListener('click', finishWorkout);
   els.activeCancelBtn.addEventListener('click', cancelWorkout);
   els.cardioBtn.addEventListener('click', () => showView('cardio'));
+  els.weightBtn.addEventListener('click', openBodyweight);
+
+  // Body weight
+  els.bwBack.addEventListener('click', () => { readBodyweight(); showView('home'); });
+  els.bwDate.addEventListener('change', () => { loadWeighInDraft(); renderBodyweight(); });
+  els.bwWeight.addEventListener('change', () => { readBodyweight(); renderBodyweight(); });
+  els.bwSaveBtn.addEventListener('click', logBodyweight);
 
   // Workout
   els.workoutBack.addEventListener('click', () => { readLogger(); showView('home'); });
